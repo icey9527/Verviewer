@@ -1,281 +1,242 @@
 ```markdown
 GPT5模仿 garbro写的玩意儿，将支持一些我感兴趣的格式。下面这个readme.md，也是它写的，我本人不会C#😃
 
-# Verviewer 开发指南
-
-本项目由 GPT‑5 开发，核心目标是：**用尽量简单的代码实现可扩展的封包 / 图片解析插件系统**。  
-下面只介绍如何开发自己的封包插件和图片插件。
 
 ---
 
-## 目录结构简要
-
-```text
-Core/
-  ArchiveRule.cs
-  ArchiveConfigLoader.cs
-  ArchiveHandler.cs       // IArchiveHandler 接口
-  ArchiveEntry.cs
-  OpenedArchive.cs
-  IImageHandler.cs        // 图片插件接口
-  PluginFactory.cs        // 插件工厂（按名字创建插件）
-
-Archives/
-  ARTDINK DAT.cs          // DatArchiveHandler（含 FSTS 嵌套）
-
-Images/
-  AgiImageHandler.cs      // AGI 图片解码插件
-
-config/
-  archives.csv            // 封包规则表
-```
-
----
-
-## 1. 封包规则表：`config/archives.csv`
-
-每一行定义**如何识别一个封包，并用哪个插件解析**：
-
-```csv
-Extension,Magic,ArchiveId,PreferredImageId
-dat,PIDX0,ARTDINK DAT,agi
-```
-
-字段含义：
-
-- `Extension`：封包文件扩展名（不带点），例如 `dat`  
-- `Magic`：魔数（文件头）
-  - 支持 ASCII 文本，比如 `PIDX0`
-  - 或十六进制：`\x50\x49\x44\x58\x30`
-- `ArchiveId`：封包插件名字（任意字符串），例如 `ARTDINK DAT`
-- `PreferredImageId`：图片插件名字（可选），例如 `agi`
-
-当用户打开一个文件时，程序会：
-
-1. 根据扩展名和文件头，匹配到某一行规则 `rule`；
-2. 用 `rule.ArchiveId` 调用 `PluginFactory.CreateArchiveHandler(rule.ArchiveId)` 创建封包插件；
-3. 打开封包，得到 `OpenedArchive` 和 `ArchiveEntry` 列表；
-4. 左侧树用这些 Entry 的 `Path` 构建目录结构；
-5. 右侧预览时，通过图片插件链解码单个文件。
-
----
-
-## 2. 封包插件开发（Archives）
-
-封包插件实现 `IArchiveHandler` 接口：
+### 1. 接口规格（不要改）
 
 ```csharp
-// Core/ArchiveHandler.cs
+// ArchiveEntry：封包中的一个条目（文件或目录）
 namespace Verviewer.Core
 {
-    internal interface IArchiveHandler
+    internal sealed class ArchiveEntry
     {
-        OpenedArchive Open(string archivePath);
-        Stream OpenEntryStream(OpenedArchive archive, ArchiveEntry entry);
+        public string Path { get; set; } = "";  // 统一用 '/' 分隔，例如 "folder/file.bin"
+        public bool IsDirectory { get; set; }   // 目录=true，普通文件=false
+        public long Offset { get; set; }        // 在封包文件中的偏移（字节）
+        public int Size { get; set; }           // 实际存储大小（压缩后）
+        public int UncompressedSize { get; set; } // 解压后大小；无压缩可等于 Size
     }
 }
 ```
 
-### 2.1 示例：自定义封包插件 `MyGameDatHandler`
+```csharp
+// OpenedArchive：已经打开的封包
+namespace Verviewer.Core
+{
+    internal sealed class OpenedArchive : IDisposable
+    {
+        public string SourcePath { get; }
+        public FileStream Stream { get; }
+        public IReadOnlyList<ArchiveEntry> Entries { get; }
+        public IArchiveHandler Handler { get; }
 
-1. 在 `config/archives.csv` 添加一行（例）：
+        public OpenedArchive(
+            string sourcePath,
+            FileStream stream,
+            IReadOnlyList<ArchiveEntry> entries,
+            IArchiveHandler handler)
+        {
+            SourcePath = sourcePath;
+            Stream = stream;
+            Entries = entries;
+            Handler = handler;
+        }
 
-```csv
-dat2,MYHD,MYGAME DAT,agi
+        public void Dispose()
+        {
+            Stream.Dispose();
+        }
+    }
+}
 ```
 
-2. 在 `Archives/` 下新建 `MYGAME DAT.cs`：
+```csharp
+// 封包处理插件接口（实现这个）
+namespace Verviewer.Core
+{
+    internal interface IArchiveHandler
+    {
+        // 打开封包文件，解析出条目列表，返回 OpenedArchive。
+        OpenedArchive Open(string archivePath);
+
+        // 打开单个条目的数据流。
+        // 对目录条目应该抛异常或直接不支持。
+        System.IO.Stream OpenEntryStream(OpenedArchive archive, ArchiveEntry entry);
+    }
+}
+```
+
+```csharp
+// 封包插件标记（已经内置，无需修改）
+// 用法见后面的骨架。
+namespace Verviewer.Core
+{
+    [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
+    internal sealed class ArchivePluginAttribute : Attribute
+    {
+        public string ArchiveId { get; }
+        public string[] Extensions { get; }
+        public byte[] MagicBytes { get; }
+        public string[] PreferredImageIds { get; }
+
+        public ArchivePluginAttribute(
+            string archiveId,
+            string[] extensions,
+            string magic,
+            string? preferredImageId = null)
+        {
+            ArchiveId = archiveId;
+            Extensions = extensions ?? Array.Empty<string>();
+            MagicBytes = ParseMagic(magic);
+            PreferredImageId = preferredImageId;
+        }
+
+        // ParseMagic 实现略，工程里已有
+    }
+}
+```
+
+---
+
+### 2. 封包插件骨架（照这个填）
 
 ```csharp
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using Verviewer.Core;
 
 namespace Verviewer.Archives
 {
-    internal class MyGameDatHandler : IArchiveHandler
+    [ArchivePlugin(
+        archiveId: "My Archive Format",        // 例如 "ARTDINK DAT"
+        extensions: new[] { "dat" },           // 不带点，比如 "dat"、"pak"
+        magic: "PIDX0",                        // 头部魔数，可以是 "TEXT" 或 "\x50\x49\x44\x58\x30"
+        preferredImageId: "agi"                // 可选：默认用哪个图片插件解图
+    )]
+    internal sealed class MyArchiveHandler : IArchiveHandler
     {
         public OpenedArchive Open(string archivePath)
         {
+            // 1) 打开文件
             var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var br = new BinaryReader(fs, Encoding.ASCII, leaveOpen: true);
+            var br = new BinaryReader(fs);
 
-            // TODO: 检查魔数、解析索引
-            // 例如：读取 entryCount，然后循环读取每条：
-            //   - name/path
-            //   - offset
-            //   - size
-            //   - uncompressedSize
+            // 2) 检查魔数（根据你的格式改）
+            fs.Position = 0;
+            byte[] magic = br.ReadBytes(5);
+            if (magic.Length < 5 || magic[0] != 'P' || magic[1] != 'I' || magic[2] != 'D')
+            {
+                br.Dispose();
+                fs.Dispose();
+                throw new InvalidDataException("Not a valid MYARCH file.");
+            }
 
+            // 3) 解析索引，构造 entries 列表
             var entries = new List<ArchiveEntry>();
 
-            // 示例：构造一个假的条目（实际请按格式解析）
-            /*
-            entries.Add(new ArchiveEntry
-            {
-                Path = "foo/bar.bin",
-                IsDirectory = false,
-                Offset = 0x1234,
-                Size = 0x1000,
-                UncompressedSize = 0x2000
-            });
-            */
+            // 示例：假设有 count 个固定大小索引，从某个位置开始
+            // fs.Position = indexStart;
+            // for (int i = 0; i < count; i++)
+            // {
+            //     long offset = br.ReadInt64();
+            //     int size   = br.ReadInt32();
+            //     string name = ...;
+            //
+            //     entries.Add(new ArchiveEntry
+            //     {
+            //         Path = name.Replace('\\','/'),
+            //         IsDirectory = false,
+            //         Offset = offset,
+            //         Size = size,
+            //         UncompressedSize = size
+            //     });
+            // }
 
             br.Dispose();
+
+            // 4) 返回 OpenedArchive（fs 不要关，由 OpenedArchive 管）
             return new OpenedArchive(archivePath, fs, entries, this);
         }
 
         public Stream OpenEntryStream(OpenedArchive archive, ArchiveEntry entry)
         {
             if (entry.IsDirectory)
-                throw new InvalidOperationException("目录没有数据流。");
+                throw new InvalidOperationException("Directory entries have no data stream.");
 
             var fs = archive.Stream;
             fs.Position = entry.Offset;
 
-            byte[] data = new byte[entry.Size];
-            int read = fs.Read(data, 0, data.Length);
-            if (read < data.Length)
-                Array.Resize(ref data, read);
+            byte[] buf = new byte[entry.Size];
+            int read = fs.Read(buf, 0, buf.Length);
+            if (read < buf.Length)
+                Array.Resize(ref buf, read);
 
-            // TODO: 若有压缩/加密，在这里做解码，然后返回 MemoryStream
-            return new MemoryStream(data, writable: false);
+            // 如有压缩，可在这里解压；否则直接包装成 MemoryStream
+            return new MemoryStream(buf, writable: false);
         }
     }
 }
 ```
 
-3. 在 `Core/PluginFactory.cs` 中让工厂认识这个插件：
+要点：
 
-```csharp
-public static IArchiveHandler? CreateArchiveHandler(string name)
-    => name switch
-    {
-        "ARTDINK DAT" => new DatArchiveHandler(),
-        "MYGAME DAT"  => new MyGameDatHandler(),
-        _             => null
-    };
-```
+1. 封包插件类必须：
+   - `internal sealed class XxxArchiveHandler : IArchiveHandler`
+   - 带 `[ArchivePlugin(...)]` 标记，扩展名不带点。
+2. `Open` 里：
+   - 自己打开 `FileStream`；
+   - 解析头、索引，填 `List<ArchiveEntry>`；
+   - 返回 `new OpenedArchive(archivePath, fs, entries, this);`（`fs` 不要提前关闭）。
+3. `OpenEntryStream` 里：
+   - 用 `archive.Stream` + `entry.Offset` / `entry.Size` 读出原始数据；
+   - 如需要解压，先解压再放进 `MemoryStream`；
+   - 失败可以抛异常或让调用方处理，但**不要关 `archive.Stream`**。
 
-**注意**：  
-- 匹配用的就是 `ArchiveId` 字符串（如 `MYGAME DAT`），和源码文件名是否相同由你自己约定。  
-- UI 不关心插件类名，只通过工厂得到 `IArchiveHandler` 实例。
 
----
+图片插件写法（格式固定）
 
-## 3. 图片插件开发（Images）
-
-图片插件实现 `IImageHandler` 接口：
-
-```csharp
-using System.Drawing;
-
-namespace Verviewer.Core
-{
-    internal interface IImageHandler
-    {
-        string Id { get; }
-        Image? TryDecode(byte[] data, string extension);
-    }
-}
-```
-
-UI 在预览时的策略非常简单：
-
-1. 将文件数据 `data` 依次传给 `_imageHandlers` 里的每个插件调用 `TryDecode`
-2. 任意插件返回非 null，即认为该文件是图片，直接显示为图片
-3. 若所有插件失败，再由 GDI (`Image.FromStream`) 尝试识别常规格式（png/jpg/bmp 等）
-4. 仍失败，则当文本显示
-
-### 3.1 示例：AGI 图片插件（已有）
-
-```csharp
 using System;
 using System.Drawing;
 using Verviewer.Core;
 
 namespace Verviewer.Images
 {
-    internal class AgiImageHandler : IImageHandler
+    [ImagePlugin(
+        id: "任意唯一字符串ID",
+        extensions: new[] { "扩展名（不带点）" } // 例如 "agi"、"tex"
+    )]
+    internal sealed class XxxImageHandler : IImageHandler
     {
-        public string Id => "agi";
-
         public Image? TryDecode(byte[] data, string extension)
         {
-            // 简单示例：只处理 .agi
-            if (!extension.Equals(".agi", StringComparison.OrdinalIgnoreCase))
+            // 1) 基本检查
+            if (data == null || data.Length < 头最小长度) return null;
+            if (!extension.EndsWith(".扩展名", StringComparison.OrdinalIgnoreCase)) return null;
+
+            // 2) 检查魔数/头，不符合直接 return null;
+            // if (!IsMyFormat(data)) return null;
+
+            try
+            {
+                // 3) 解析宽/高/bpp/像素偏移...
+                // 4) new Bitmap(...) 解码像素
+                // return bmp;
+            }
+            catch
+            {
+                // 解析失败统一返回 null，让框架去试别的插件
                 return null;
-
-            // TODO: 按你之前的 Python/C 逻辑解析 header、bpp、palette、像素数据
-            // 例如：
-            // int width = ...
-            // int height = ...
-            // var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            // 填充 bmp 的像素...
-            // return bmp;
-
-            return null; // 解码失败返回 null
+            }
         }
     }
 }
 ```
 
-### 3.2 注册图片插件（工厂）
+约定（最重要的三条）：
 
-`Core/PluginFactory.cs` 示例：
-
-```csharp
-using System.Collections.Generic;
-using Verviewer.Images;
-
-namespace Verviewer.Core
-{
-    internal static class PluginFactory
-    {
-        public static IReadOnlyList<IImageHandler> CreateAllImageHandlers()
-            => new IImageHandler[]
-            {
-                new AgiImageHandler()
-                // 以后你有别的图片插件，就在这里多 new 一个
-            };
-
-        public static string? GetImagePluginName(IImageHandler handler)
-            => handler switch
-            {
-                AgiImageHandler => "agi",
-                _               => null
-            };
-    }
-}
-```
-
-UI 会自动：
-
-- 在预览时遍历 `IImageHandler` 列表，将文件数据依次交给每个插件尝试解码  
-- 用 `GetImagePluginName` 将插件实例映射为字符串（例如 `"agi"`），在状态栏中显示
-
-如果你以后加一个 `TexImageHandler`，只需：
-
-- 在 `Images/` 下创建类实现 `IImageHandler`  
-- 在 `CreateAllImageHandlers` 中返回它  
-- 在 `GetImagePluginName` 中为它返回对应字符串（例如 `"tex"`）  
-
-UI 无需任何改动。
-
----
-
-## 4. 注意事项
-
-- 所有封包插件必须是**按需读取**：  
-  - `Open()` 中不要解压所有文件到磁盘，只解析索引即可；  
-  - `OpenEntryStream()` 中才根据 `ArchiveEntry` 信息读取实际数据，必要时边读边解压。  
-- 所有图片插件必须是**静默失败**：  
-  - 不能抛异常或 MessageBox，解码失败时返回 null 即可；  
-  - 由 UI 自动 fall-back 到其它插件或文本预览。  
-- `archives.csv` 是 Verviewer 的“指令总表”，任何新封包格式都应该在其中增加一行，并在 `PluginFactory` 中映射到具体插件类。
-
----
-
-```
+1. 不是自己格式 / 解析失败：**返回 null，不抛异常**。  
+2. `extension` 带点（比如 `".agi"`），`extensions` 里是不带点（比如 `"agi"`）。  
+3. 只需要解出一张 `Bitmap` 即可，框架负责显示 / 保存。

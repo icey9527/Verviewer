@@ -8,7 +8,6 @@ namespace Verviewer.Core
     internal interface IImageHandler
     {
         /// <summary>图片插件ID，可以在 archives.csv 里作为 PreferredImageId 使用。</summary>
-        string Id { get; }
 
         /// <summary>
         /// 尝试解码。data 是整个文件内容，extension 是文件扩展名（例如 ".agi"）。

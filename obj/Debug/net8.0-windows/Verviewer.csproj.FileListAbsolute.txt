@@ -7,9 +7,9 @@ D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\Verviewer.GeneratedMSBuildEditor
 D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\Verviewer.AssemblyInfoInputs.cache
 D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\Verviewer.AssemblyInfo.cs
 D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\Verviewer.csproj.CoreCompileInputs.cache
+D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\Verviewer.sourcelink.json
 D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\Verviewer.dll
 D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\refint\Verviewer.dll
 D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\Verviewer.pdb
 D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\Verviewer.genruntimeconfig.cache
 D:\Verviewer\Verviewer\obj\Debug\net8.0-windows\ref\Verviewer.dll
-D:\Verviewer\Verviewer\bin\Debug\net8.0-windows\config\archives.csv

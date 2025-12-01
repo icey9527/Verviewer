@@ -23,6 +23,7 @@ namespace Verviewer.UI
         private ToolStripStatusLabel _statusLeft = null!;
         private ToolStripStatusLabel _statusRight = null!;
         private ToolStripControlHost _encodingHost = null!;
+        private ToolStripControlHost _zoomHost = null!;
         private ComboBox _comboEncoding = null!; // 状态栏里的编码选择
 
         // 规则 & 插件
@@ -31,7 +32,7 @@ namespace Verviewer.UI
 
         // 按需打开的封包
         private OpenedArchive? _currentArchive;
-        private string? _currentArchiveRuleName;     // 来自 CSV 的 ArchiveId（例如 "ARTDINK DAT"）
+        private string? _currentArchiveRuleName;     // ArchiveId（例如 "ARTDINK DAT"）
         private string? _currentImageHandlerName;    // 当前预览实际用到的图片插件名（"agi"/"builtin"/null）
         private string? _lastSelectedEntryPath;      // 当前选中的 ArchiveEntry.Path
 
@@ -55,26 +56,15 @@ namespace Verviewer.UI
 
         private void InitializeConfigAndHandlers()
         {
-            string baseDir = AppContext.BaseDirectory;
-            string archivesCsv = Path.Combine(baseDir, "config", "archives.csv");
+            // 通过 PluginFactory 反射收集所有封包规则和图片插件
+            _archiveRules = PluginFactory.ArchiveRules.ToList();
 
-            if (!File.Exists(archivesCsv))
-            {
-                MessageBox.Show(this, $"找不到配置文件: {archivesCsv}", "错误",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            _archiveRules = ArchiveConfigLoader.Load(archivesCsv);
-
-            // 图片插件：一次性创建全部，按需尝试解码
             _imageHandlers.Clear();
             foreach (var img in PluginFactory.CreateAllImageHandlers())
             {
                 _imageHandlers.Add(img);
             }
         }
-
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);

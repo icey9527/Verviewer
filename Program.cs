@@ -12,7 +12,6 @@ namespace Verviewer
         {
             try
             {
-                // 支持 cp932 / gb18030 等编码
                 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
                 Application.EnableVisualStyles();

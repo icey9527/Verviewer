@@ -1,8 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "6hH+hsqR7p0=",
+  "dgSpecHash": "4B1XTOtTugQ=",
   "success": true,
   "projectFilePath": "D:\\Verviewer\\Verviewer\\Verviewer.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "C:\\Users\\Administrator\\.nuget\\packages\\microsoft.net.illink.tasks\\8.0.22\\microsoft.net.illink.tasks.8.0.22.nupkg.sha512"
+  ],
   "logs": []
 }

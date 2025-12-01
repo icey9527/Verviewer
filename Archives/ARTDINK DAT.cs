@@ -6,10 +6,6 @@ using Verviewer.Core;
 
 namespace Verviewer.Archives
 {
-    /// <summary>
-    /// 公共压缩工具，来自你 C 代码里的 uncompress。
-    /// DAT 和嵌套的 FSTS 都用这一套。
-    /// </summary>
     internal static class ArtdinkCompression
     {
         public static bool TryDecompress(byte[] data, out byte[] output)
@@ -157,10 +153,14 @@ namespace Verviewer.Archives
     /// 1. 传统 DAT 索引格式；
     /// 2. DAT 内嵌 FSTS 子包（process_pidx0 那一套）。
     /// </summary>
+    [ArchivePlugin(
+        archiveId: "Artdink DAT",
+        extensions: new[] { "dat" },
+        magic: "PIDX0",
+        preferredImageId: "Artdink AGI,Artdink TXF,Artdink FAC,Artdink TEX")]
     internal class DatArchiveHandler : IArchiveHandler
     {
         // 这个 Id 现在只是多余字段，你可以留着当注释。
-        public string Id => "ARTDINK DAT";
 
         public OpenedArchive Open(string archivePath)
         {
@@ -427,7 +427,7 @@ namespace Verviewer.Archives
                 if (b == 0) break;
                 bytes.Add(b);
             }
-            return Encoding.ASCII.GetString(bytes.ToArray());
+            return Encoding.GetEncoding(932).GetString(bytes.ToArray());
         }
 
         private static string ReadNullTerminatedStringAt(FileStream fs, long offset)
@@ -445,7 +445,7 @@ namespace Verviewer.Archives
             }
 
             fs.Position = current;
-            return Encoding.ASCII.GetString(bytes.ToArray());
+            return Encoding.GetEncoding(932).GetString(bytes.ToArray());
         }
 
         private class DatEntry

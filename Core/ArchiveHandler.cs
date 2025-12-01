@@ -11,8 +11,6 @@ namespace Verviewer.Core
         /// 插件ID，要和 config/archives.csv 里的 ArchiveId 一致。
         /// 你可以直接写 "ARTDINK DAT" 这种人类可读的名字。
         /// </summary>
-        string Id { get; }
-
         /// <summary>
         /// 打开封包：只解析索引表，不解压文件。
         /// </summary>

@@ -33,8 +33,8 @@ namespace Verviewer.UI
         {
             if (_archiveRules.Count == 0)
             {
-                MessageBox.Show(this, "还没有加载封包规则（archives.csv）。", "错误",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, "没有找到任何封包插件，请确认插件类已加 [ArchivePlugin] 特性。",
+                    "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
@@ -253,8 +253,75 @@ namespace Verviewer.UI
             string ext = Path.GetExtension(entry.Path) ?? string.Empty;
             ext = ext.ToLowerInvariant();
 
-            // 2. 先尝试所有图片插件（现在就一个 AgiImageHandler）
+            // 提前读一点头部用于 Magic 匹配（比如前 16 字节）
+            byte[] header = new byte[Math.Min(16, data.Length)];
+            Array.Copy(data, header, header.Length);
+
+            // 2. 根据扩展名 + Magic 过滤出候选图片插件
+            var candidates = new List<IImageHandler>();
             foreach (var handler in _imageHandlers)
+            {
+                var attr = PluginFactory.GetImagePluginAttribute(handler);
+                if (attr == null)
+                {
+                    // 没有 Attribute 的插件，全都算候选（你现在基本不会有这种）
+                    candidates.Add(handler);
+                    continue;
+                }
+
+                bool extMatch = false;
+                if (attr.Extensions.Length == 0)
+                {
+                    extMatch = true; // 没写扩展名 = 不限制扩展名
+                }
+                else
+                {
+                    foreach (var e in attr.Extensions)
+                    {
+                        if (string.IsNullOrWhiteSpace(e)) continue;
+                        string norm = e.StartsWith(".") ? e.ToLowerInvariant() : ("." + e.ToLowerInvariant());
+                        if (ext == norm)
+                        {
+                            extMatch = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!extMatch)
+                    continue;
+
+                // Magic 匹配（可选）
+                bool magicMatch = true;
+                if (attr.MagicBytes.Length > 0)
+                {
+                    if (header.Length < attr.MagicBytes.Length)
+                    {
+                        magicMatch = false;
+                    }
+                    else
+                    {
+                        for (int i = 0; i < attr.MagicBytes.Length; i++)
+                        {
+                            if (header[i] != attr.MagicBytes[i])
+                            {
+                                magicMatch = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (magicMatch)
+                    candidates.Add(handler);
+            }
+
+            // 如果一个候选都没有，就退回到“尝试所有插件”
+            if (candidates.Count == 0)
+                candidates.AddRange(_imageHandlers);
+
+            // 3. 先尝试候选图片插件
+            foreach (var handler in candidates)
             {
                 var img = handler.TryDecode(data, ext);
                 if (img != null)
@@ -265,7 +332,7 @@ namespace Verviewer.UI
                 }
             }
 
-            // 3. 再尝试用 GDI 识别常规图片（png / jpg / bmp 等）
+            // 4. 再尝试 GDI
             try
             {
                 using var ms = new MemoryStream(data);
@@ -278,7 +345,7 @@ namespace Verviewer.UI
                 // 不是正常图片，就当文本处理
             }
 
-            // 4. 全都不是图片：按文本显示（用底部编码）
+            // 5. 文本
             ShowText(data);
         }
 
@@ -445,13 +512,14 @@ namespace Verviewer.UI
 
             try
             {
-                return name switch
-                {
-                    "utf-8" => Encoding.UTF8,
-                    "gb18030" => Encoding.GetEncoding("gb18030"),
-                    "cp932" or "shift_jis" or null => Encoding.GetEncoding(932),
-                    _ => Encoding.UTF8
-                };
+            return name switch
+            {
+                "utf-8" => Encoding.UTF8,
+                "gb18030" => Encoding.GetEncoding("gb18030"),
+                "cp936" => Encoding.GetEncoding(936), // 新增：cp936 对应 GB2312
+                "cp932" or "shift_jis" or null => Encoding.GetEncoding(932),
+                _ => Encoding.UTF8
+            };
             }
             catch
             {

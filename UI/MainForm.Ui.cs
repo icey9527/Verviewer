@@ -41,7 +41,7 @@ namespace Verviewer.UI
             _txtPreview = new RichTextBox
             {
                 Dock = DockStyle.Fill,
-                Font = new Font("Consolas", 10),
+                Font = new Font("Microsoft YaHei", 10),
                 ReadOnly = true,
                 HideSelection = false,
                 DetectUrls = false,
@@ -75,12 +75,10 @@ namespace Verviewer.UI
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
             };
             _numZoom.ValueChanged += NumZoom_ValueChanged;
-            _numZoom.Location = new Point(4, 4);
+            _numZoom.Location = new Point(20, 28);
 
             _split.Panel2.Controls.Add(_txtPreview);
             _split.Panel2.Controls.Add(_imagePanel);
-            _split.Panel2.Controls.Add(_numZoom);
-            _numZoom.BringToFront();
 
             // 底部状态栏：左边插件信息，中间编码选择，右边提取进度/状态
             _statusStrip = new StatusStrip();
@@ -97,7 +95,7 @@ namespace Verviewer.UI
                 Width = 120
             };
             // 默认 cp932
-            _comboEncoding.Items.AddRange(new object[] { "cp932", "utf-8", "gb18030" });
+            _comboEncoding.Items.AddRange(new object[] { "cp932", "cp936", "utf-8" });
             _comboEncoding.SelectedIndex = 0;
             _comboEncoding.SelectedIndexChanged += ComboEncoding_SelectedIndexChanged;
 
@@ -114,9 +112,18 @@ namespace Verviewer.UI
                 TextAlign = System.Drawing.ContentAlignment.MiddleRight
             };
 
+            _zoomHost = new ToolStripControlHost(_numZoom)
+            {
+                AutoSize = false,
+                Width = 70,
+                Visible = false // 初始隐藏
+            };
+
+
             _statusStrip.Items.Add(_statusLeft);
-            _statusStrip.Items.Add(_encodingHost);
             _statusStrip.Items.Add(_statusRight);
+            _statusStrip.Items.Add(_zoomHost);
+            _statusStrip.Items.Add(_encodingHost);
 
             Controls.Add(_split);
             Controls.Add(_statusStrip);

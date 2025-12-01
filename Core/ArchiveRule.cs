@@ -15,6 +15,6 @@ namespace Verviewer.Core
         public string ArchiveId { get; set; } = string.Empty;
 
         /// <summary>该封包内部优先使用哪个图片插件（IImageHandler.Id），可选。</summary>
-        public string? PreferredImageId { get; set; }
+        public string[] PreferredImageIds { get; set; } = Array.Empty<string>();
     }
 }
