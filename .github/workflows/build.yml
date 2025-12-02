@@ -23,9 +23,6 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
-      - name: dotnet --info
-        run: dotnet --info
-
       - name: Restore (default)
         run: dotnet restore
 
@@ -35,7 +32,6 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
-      # 不带运行时（框架依赖）- 修复：添加禁用 PDB
       - name: Publish framework-dependent
         run: >
           dotnet publish Verviewer.csproj -c Release
@@ -44,7 +40,6 @@ jobs:
           -o out/win-fdd
           --no-restore
 
-      # 带运行时（自包含 + 单文件 + 压缩）- 修复：添加压缩
       - name: Publish self-contained single-file
         run: >
           dotnet publish Verviewer.csproj -c Release
@@ -62,23 +57,39 @@ jobs:
           powershell Compress-Archive -Path out\win-scd\* -DestinationPath out\Verviewer-win-x64-selfcontained.zip
           powershell Compress-Archive -Path out\win-fdd\* -DestinationPath out\Verviewer-win-framework-dependent.zip
 
-      - name: Stamp version
-        shell: pwsh
-        run: |
-          $date = Get-Date -Format "yyyy-MM-dd HH:mm"
-          $tag  = "nightly-" + (Get-Date -Format "yyyyMMdd-HHmm") + "-${{ github.run_number }}"
-          echo "REL_TITLE=最新源码自动构建 $date" >> $env:GITHUB_ENV
-          echo "REL_TAG=$tag" >> $env:GITHUB_ENV
+      - name: Delete old release
+        uses: cb80/delrel@latest
+        with:
+          tag: nightly
+          token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
 
       - name: Create GitHub pre-release
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ env.REL_TAG }}
-          name: ${{ env.REL_TITLE }}
+          tag_name: nightly
+          name: Nightly Build (Auto Updated)
+          body: |
+            ## 📦 下载说明
+            
+            | 文件 | 说明 | 适合谁 |
+            |------|------|--------|
+            | `Verviewer-win-x64-selfcontained.zip` | **推荐下载** ⭐ 解压即用，无需安装任何东西 | 大多数用户 |
+            | `Verviewer-win-framework-dependent.zip` | 体积小，但需要先安装 [.NET 9 运行时](https://dotnet.microsoft.com/download/dotnet/9.0) | 已安装 .NET 的用户 |
+            
+            ## 💡 不知道选哪个？
+            
+            **直接下载第一个 `selfcontained` 版本就对了！** 解压后双击 exe 即可运行。
+            
+            ---
+            
+            ⚠️ 这是自动构建的测试版本，可能不稳定。
+            
+            🕐 构建时间: ${{ github.event.head_commit.timestamp }}
+            📝 提交: [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
           prerelease: true
           draft: false
-          generate_release_notes: false
           files: |
             out/Verviewer-win-x64-selfcontained.zip
             out/Verviewer-win-framework-dependent.zip
