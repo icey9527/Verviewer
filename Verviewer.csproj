@@ -17,7 +17,7 @@
   </PropertyGroup>
 
 <ItemGroup>
-  <EmbeddedResource Include="Misc\IPF\list.zlib" />
+  <EmbeddedResource Include="Misc\**\*" />
 </ItemGroup>
 
 </Project>

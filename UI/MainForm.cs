@@ -39,7 +39,12 @@ namespace Verviewer.UI
 
         public MainForm()
         {
-            this.Icon = new Icon("Misc/ver.ico");
+            var asm = typeof(MainForm).Assembly;
+            const string iconResource = "Verviewer.Misc.ver.ico";
+            this.Icon = asm.GetManifestResourceStream(iconResource) is var stream && stream != null 
+                ? new Icon(stream) 
+                : SystemIcons.Application;
+            
             Text = "Verviewer";
             Width = 1200;
             Height = 800;

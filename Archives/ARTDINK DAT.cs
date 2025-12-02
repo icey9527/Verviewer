@@ -150,7 +150,7 @@ namespace Verviewer.Archives
         extensions: new[] { "dat" },
         magics: new[] { "PIDX0" }
         )]
-    internal class DatArchiveHandler : IArchiveHandler
+    internal class Artdink_DAT : IArchiveHandler
 {
 
         public OpenedArchive Open(string archivePath)

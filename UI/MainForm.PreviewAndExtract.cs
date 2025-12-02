@@ -32,42 +32,70 @@ namespace Verviewer.UI
 
         private void OpenArchive(string archivePath)
         {
-            // 用解析器按“扩展名或魔术”挑选插件
+            // 先用解析器按“扩展名或魔术”排出所有候选插件（已按权重排好）
             using var fsProbe = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var type = PluginFactory.ResolveArchiveType(archivePath, fsProbe);
-            if (type == null)
+            var types = PluginFactory.ResolveArchiveTypes(archivePath, fsProbe).ToList();
+
+            if (types.Count == 0)
             {
                 MessageBox.Show(this, "没有找到可以处理这个封包的插件。", "无法打开",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            var handler = (IArchiveHandler?)Activator.CreateInstance(type);
-            if (handler == null)
-            {
-                MessageBox.Show(this, $"无法创建封包处理器：{type.FullName}", "无法打开",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
             _currentArchive?.Dispose();
             _currentArchive = null;
-
-            var attr = type.GetCustomAttribute<ArchivePluginAttribute>();
-            _currentArchiveRuleName = attr?.Id ?? type.Name;
             _currentImageHandlerName = null;
             _lastSelectedEntryPath = null;
 
-            try
+            OpenedArchive? opened = null;
+            string? usedRuleName = null;
+            Exception? lastError = null;
+
+            foreach (var type in types)
             {
-                _currentArchive = handler.Open(archivePath);
+                IArchiveHandler? handler;
+                try
+                {
+                    handler = Activator.CreateInstance(type) as IArchiveHandler;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (handler == null)
+                    continue;
+
+                try
+                {
+                    opened = handler.Open(archivePath);
+
+                    var attr = type.GetCustomAttribute<ArchivePluginAttribute>();
+                    usedRuleName = attr?.Id ?? type.Name;
+
+                    break; // 成功，用这个插件，停止尝试
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex; // 记录错误，继续下一个插件
+                }
             }
-            catch (Exception ex)
+
+            if (opened == null)
             {
-                MessageBox.Show(this, "打开封包失败：\n" + ex.Message, "错误",
+                
+                var msg = "所有候选插件都无法打开这个封包。";
+                if (lastError != null)
+                    msg += "\n最后一个错误信息：\n" + lastError.Message;
+
+                MessageBox.Show(this, msg, "无法打开",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+
+            _currentArchive = opened;
+            _currentArchiveRuleName = usedRuleName ?? "Unknown";
 
             Text = $"Verviewer - {Path.GetFileName(archivePath)}";
             UpdateStatus(CurrentPluginStatus, string.Empty);
@@ -202,22 +230,41 @@ namespace Verviewer.UI
                 if (read < header.Length) Array.Resize(ref header, read);
             }
 
-            // 2) 选择插件
-            var imgType = PluginFactory.ResolveImageType(entry.Path, header);
+            // 2) 选择插件：按权重排好顺序，逐个尝试
             Image? decoded = null;
             string pluginName = "builtin";
 
-            if (imgType != null)
+            var imgTypes = PluginFactory.ResolveImageTypes(entry.Path, header).ToList();
+            foreach (var imgType in imgTypes)
             {
-                var obj = Activator.CreateInstance(imgType);
-                var attr = imgType.GetCustomAttribute<ImagePluginAttribute>();
-                pluginName = attr?.Id ?? imgType.Name;
+                object? obj;
+                try
+                {
+                    obj = Activator.CreateInstance(imgType);
+                }
+                catch
+                {
+                    continue;
+                }
 
-                // 2a) 流式解码（唯一接口）
-                if (obj is IImageHandler ih)
+                if (obj is not IImageHandler ih)
+                    continue;
+
+                try
                 {
                     using var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry);
                     decoded = ih.TryDecode(s, ext);
+                }
+                catch
+                {
+                    decoded = null;
+                }
+
+                if (decoded != null)
+                {
+                    var attr = imgType.GetCustomAttribute<ImagePluginAttribute>();
+                    pluginName = attr?.Id ?? imgType.Name;
+                    break; // 成功就停
                 }
             }
 
@@ -533,23 +580,42 @@ namespace Verviewer.UI
                                     if (r < head.Length) Array.Resize(ref head, r);
                                 }
 
-                                var imgType = PluginFactory.ResolveImageType("." + ext, head);
-                                if (imgType != null)
+                                // 按权重排好的候选图片插件，逐个尝试
+                                var imgTypes = PluginFactory.ResolveImageTypes("." + ext, head).ToList();
+                                foreach (var imgType in imgTypes)
                                 {
-                                    var obj = Activator.CreateInstance(imgType);
+                                    object? obj;
+                                    try
+                                    {
+                                        obj = Activator.CreateInstance(imgType);
+                                    }
+                                    catch
+                                    {
+                                        continue;
+                                    }
 
-                                    if (obj is IImageHandler ih)
+                                    if (obj is not IImageHandler ih)
+                                        continue;
+
+                                    try
                                     {
                                         using var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry);
                                         img = ih.TryDecode(s, "." + ext);
                                     }
+                                    catch
+                                    {
+                                        img = null;
+                                    }
+
+                                    if (img != null)
+                                        break; // 成功就不试后面的插件了
                                 }
 
                                 if (img == null)
                                 {
                                     using var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry);
                                     var gdi = Image.FromStream(s, useEmbeddedColorManagement: true, validateImageData: true);
-                                    img = gdi; // 交给下方 ShowImage/保存时克隆与释放
+                                    img = gdi; // 保存时再 Dispose
                                 }
 
                                 if (img != null)

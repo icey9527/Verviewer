@@ -103,7 +103,7 @@ internal static class PluginFactory
         foreach (var s in magics)
         {
             if (string.IsNullOrWhiteSpace(s)) continue;
-            var x = s.Trim();
+            var x = s;
             if (x.StartsWith("hex:", StringComparison.OrdinalIgnoreCase))
             {
                 var hex = new string(x.AsSpan(4).ToString().Where(c => !char.IsWhiteSpace(c) && c != ',').ToArray());
@@ -159,7 +159,10 @@ internal static class PluginFactory
         }
     }
 
-    public static Type? ResolveArchiveType(string path, Stream s)
+    /// <summary>
+    /// 封包插件：按权重（Magic 2 分 + Ext 1 分）和匹配长度/Id 排序，返回全部候选插件类型。
+    /// </summary>
+    public static IReadOnlyList<Type> ResolveArchiveTypes(string path, Stream s)
     {
         EnsureBuilt();
         var ext = GetExt(path);
@@ -168,24 +171,32 @@ internal static class PluginFactory
         var list = new List<(ArchiveMeta p, int score, int magicLen)>();
         foreach (var p in _archives)
         {
-            bool extHit = ext.Length > 0 && p.Ext.Contains(ext, StringComparer.OrdinalIgnoreCase);
+            bool extHit = ext.Length > 0 &&
+                          p.Ext.Contains(ext, StringComparer.OrdinalIgnoreCase);
+
             int len = 0;
-            bool magicHit = p.Magic.Length > 0 && StartsWithAny(head, p.Magic, out len);
-            if (!(extHit || magicHit)) continue;
+            bool magicHit = p.Magic.Length > 0 &&
+                            StartsWithAny(head, p.Magic, out len);
+
+            if (!(extHit || magicHit))
+                continue;
+
             int score = (extHit ? 1 : 0) + (magicHit ? 2 : 0);
             list.Add((p, score, len));
         }
 
-        var picked = list
+        return list
             .OrderByDescending(x => x.score)
             .ThenByDescending(x => x.magicLen)
             .ThenBy(x => x.p.Id, StringComparer.Ordinal)
-            .FirstOrDefault();
-
-        return picked.p?.Type;
+            .Select(x => x.p.Type)
+            .ToList();
     }
 
-    public static Type? ResolveImageType(string? nameOrExt, ReadOnlySpan<byte> data)
+    /// <summary>
+    /// 图片插件：按权重（Magic 2 分 + Ext 1 分）和匹配长度/Id 排序，返回全部候选插件类型。
+    /// </summary>
+    public static IReadOnlyList<Type> ResolveImageTypes(string? nameOrExt, ReadOnlySpan<byte> data)
     {
         EnsureBuilt();
         var ext = GetExt(nameOrExt);
@@ -194,20 +205,25 @@ internal static class PluginFactory
         var list = new List<(ImageMeta p, int score, int magicLen)>();
         foreach (var p in _images)
         {
-            bool extHit = ext.Length > 0 && p.Ext.Contains(ext, StringComparer.OrdinalIgnoreCase);
+            bool extHit = ext.Length > 0 &&
+                          p.Ext.Contains(ext, StringComparer.OrdinalIgnoreCase);
+
             int len = 0;
-            bool magicHit = p.Magic.Length > 0 && StartsWithAny(head, p.Magic, out len);
-            if (!(extHit || magicHit)) continue;
+            bool magicHit = p.Magic.Length > 0 &&
+                            StartsWithAny(head, p.Magic, out len);
+
+            if (!(extHit || magicHit))
+                continue;
+
             int score = (extHit ? 1 : 0) + (magicHit ? 2 : 0);
             list.Add((p, score, len));
         }
 
-        var picked = list
+        return list
             .OrderByDescending(x => x.score)
             .ThenByDescending(x => x.magicLen)
             .ThenBy(x => x.p.Id, StringComparer.Ordinal)
-            .FirstOrDefault();
-
-        return picked.p?.Type;
+            .Select(x => x.p.Type)
+            .ToList();
     }
 }
