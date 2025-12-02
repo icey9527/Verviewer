@@ -21,7 +21,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 8.0.x  # 改成 8
 
       - name: Restore (default)
         run: dotnet restore
@@ -32,6 +32,7 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
+      # 不带运行时
       - name: Publish framework-dependent
         run: >
           dotnet publish Verviewer.csproj -c Release
@@ -40,6 +41,7 @@ jobs:
           -o out/win-fdd
           --no-restore
 
+      # 带运行时 + 压缩
       - name: Publish self-contained single-file
         run: >
           dotnet publish Verviewer.csproj -c Release
@@ -73,21 +75,28 @@ jobs:
           body: |
             ## 📦 下载说明
             
-            | 文件 | 说明 | 适合谁 |
-            |------|------|--------|
-            | `Verviewer-win-x64-selfcontained.zip` | **推荐下载** ⭐ 解压即用，无需安装任何东西 | 大多数用户 |
-            | `Verviewer-win-framework-dependent.zip` | 体积小，但需要先安装 [.NET 9 运行时](https://dotnet.microsoft.com/download/dotnet/9.0) | 已安装 .NET 的用户 |
+            ### ⭐ 推荐下载（大多数用户选这个）
             
-            ## 💡 不知道选哪个？
+            👉 **[点击下载 Verviewer-win-x64-selfcontained.zip](https://github.com/${{ github.repository }}/releases/download/nightly/Verviewer-win-x64-selfcontained.zip)**
             
-            **直接下载第一个 `selfcontained` 版本就对了！** 解压后双击 exe 即可运行。
+            解压后双击 `Verviewer.exe` 即可运行，无需安装任何东西！
+            
+            ---
+            
+            ### 💾 精简版（体积更小）
+            
+            👉 [点击下载 Verviewer-win-framework-dependent.zip](https://github.com/${{ github.repository }}/releases/download/nightly/Verviewer-win-framework-dependent.zip)
+            
+            需要先安装 [.NET 8 运行时](https://dotnet.microsoft.com/download/dotnet/8.0)，适合已安装 .NET 的用户。
             
             ---
             
             ⚠️ 这是自动构建的测试版本，可能不稳定。
             
-            🕐 构建时间: ${{ github.event.head_commit.timestamp }}
-            📝 提交: [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            | 信息 | 详情 |
+            |------|------|
+            | 🕐 构建时间 | ${{ github.event.head_commit.timestamp }} |
+            | 📝 提交 | [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
           prerelease: true
           draft: false
           files: |
