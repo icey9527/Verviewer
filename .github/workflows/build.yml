@@ -26,7 +26,6 @@ jobs:
       - name: dotnet --info
         run: dotnet --info
 
-      # 两次 restore（一次默认，一次带 RID），避免 TFM/RID 不匹配导致的 NETSDK1047
       - name: Restore (default)
         run: dotnet restore
 
@@ -36,18 +35,25 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
-      # 不带运行时（框架依赖）
+      # 不带运行时（框架依赖）- 修复：添加禁用 PDB
       - name: Publish framework-dependent
-        run: dotnet publish Verviewer.csproj -c Release -o out/win-fdd --no-restore
+        run: >
+          dotnet publish Verviewer.csproj -c Release
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o out/win-fdd
+          --no-restore
 
-      # 带运行时（自包含 + 单文件）
+      # 带运行时（自包含 + 单文件 + 压缩）- 修复：添加压缩
       - name: Publish self-contained single-file
         run: >
           dotnet publish Verviewer.csproj -c Release
           -r win-x64 --self-contained true
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:DebugType=None -p:DebugSymbols=false
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
           -o out/win-scd
           --no-restore
 
@@ -56,7 +62,6 @@ jobs:
           powershell Compress-Archive -Path out\win-scd\* -DestinationPath out\Verviewer-win-x64-selfcontained.zip
           powershell Compress-Archive -Path out\win-fdd\* -DestinationPath out\Verviewer-win-framework-dependent.zip
 
-      # 计算时间和 tag
       - name: Stamp version
         shell: pwsh
         run: |
@@ -65,7 +70,6 @@ jobs:
           echo "REL_TITLE=最新源码自动构建 $date" >> $env:GITHUB_ENV
           echo "REL_TAG=$tag" >> $env:GITHUB_ENV
 
-      # 生成预发布（右侧 Releases 页可见）
       - name: Create GitHub pre-release
         uses: softprops/action-gh-release@v2
         with:
