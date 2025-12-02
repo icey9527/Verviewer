@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using System.Windows.Forms;
 using Verviewer.Core;
+using Verviewer.Archives;
 
 namespace Verviewer.UI
 {
@@ -26,11 +27,43 @@ namespace Verviewer.UI
         private ToolStripControlHost _zoomHost = null!;
         private ComboBox _comboEncoding = null!; // 状态栏里的编码选择
 
+        // 菜单 / 右键菜单
+        private ContextMenuStrip? _treeContextMenu;
+        private ContextMenuStrip? _imageContextMenu;
+        private ToolStripMenuItem? _menuExtractItem;
+        private ToolStripMenuItem? _menuBackItem;
+        private ToolStripMenuItem? _treeExtractMenuItem;
+        private ToolStripMenuItem? _treeCopyImageMenuItem;
+
+        // 导航历史：支持从文件夹 → 封包 再“返回”
+        private readonly Stack<ArchiveSnapshot> _archiveHistory = new();
+
+        // 用于保存上一个 Archive 的上下文
+        private sealed class ArchiveSnapshot
+        {
+            public OpenedArchive Archive { get; }
+            public string Title { get; }
+            public string? RuleName { get; }
+            public bool MenuExtractEnabled { get; }
+
+            public ArchiveSnapshot(OpenedArchive archive, string title, string? ruleName, bool menuExtractEnabled)
+            {
+                Archive = archive;
+                Title = title;
+                RuleName = ruleName;
+                MenuExtractEnabled = menuExtractEnabled;
+            }
+        }
+
         // 按需打开的封包
         private OpenedArchive? _currentArchive;
         private string? _currentArchiveRuleName;     // 当前封包插件 Id
         private string? _currentImageHandlerName;    // 当前图片插件 Id（或 "builtin"/null）
         private string? _lastSelectedEntryPath;      // 当前选中的 ArchiveEntry.Path
+
+        // 文本预览缓存（避免重复从封包读取）
+        private byte[]? _lastPreviewTextData;
+        private ArchiveEntry? _lastTextEntry;        
 
         // 图片缩放相关
         private Image? _originalImage;
@@ -49,17 +82,19 @@ namespace Verviewer.UI
             Width = 1200;
             Height = 800;
             StartPosition = FormStartPosition.CenterScreen;
-
-            InitializeConfigAndHandlers();
             InitializeUi();
 
             this.MouseWheel += MainForm_MouseWheel;
         }
 
-        private void InitializeConfigAndHandlers()
+        private void Tree_AfterExpand(object? sender, TreeViewEventArgs e)
         {
-            // 新版不需要预先收集规则/插件，PluginFactory 在 Resolve 时按需构建
+            if (_currentArchive?.Handler is FolderArchiveHandler folderHandler)
+            {
+                folderHandler.LoadSubdirectories(_tree, e.Node, _currentArchive.SourcePath);
+            }
         }
+
 
         protected override void OnLoad(EventArgs e)
         {
