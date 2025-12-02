@@ -2,12 +2,9 @@
 // - IPF unpacker
 // - z0_unpack + zlib-based raw deflate decompressor
 
-using System;
-using System.Collections.Generic;
-using System.IO;
+
 using System.IO.Compression;
 using System.Text;
-using System.Windows.Forms;
 using Verviewer.Core;
 
 namespace Verviewer.Archives
@@ -26,18 +23,7 @@ namespace Verviewer.Archives
             var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             var br = new BinaryReader(fs);
 
-            fs.Position = 0;
-            byte[] magic = br.ReadBytes(4);
-            if (magic.Length < 4 ||
-                magic[0] != (byte)'I' ||
-                magic[1] != (byte)'P' ||
-                magic[2] != (byte)'F' ||
-                magic[3] != (byte)' ')
-            {
-                br.Dispose();
-                fs.Dispose();
-                throw new InvalidDataException("Not an IPF PAK file (magic != 'IPF ').");
-            }
+            fs.Position = 4;
 
             uint entryCount = br.ReadUInt32();
             if (entryCount > 1_000_000)
@@ -87,17 +73,6 @@ namespace Verviewer.Archives
             string baseName = Path.GetFileNameWithoutExtension(pakPath);
             string partPath = Path.Combine(dir, $"{baseName}.p{partIndex:00}");
 
-            if (!File.Exists(partPath))
-            {
-                MessageBox.Show(
-                    $"Missing IPF data file:\n{partPath}\n\n" +
-                    $"Some entries in \"{Path.GetFileName(pakPath)}\" cannot be read.",
-                    "IPF data missing",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
-                return new MemoryStream(Array.Empty<byte>(), writable: false);
-            }
 
             byte[] raw = new byte[entry.Size];
 

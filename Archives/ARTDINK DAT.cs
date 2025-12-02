@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Text;
 using Verviewer.Core;
 
@@ -154,23 +151,12 @@ namespace Verviewer.Archives
         magics: new[] { "PIDX0" }
         )]
     internal class DatArchiveHandler : IArchiveHandler
-    {
-        // 这个 Id 现在只是多余字段，你可以留着当注释。
+{
 
         public OpenedArchive Open(string archivePath)
         {
             var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             var br = new BinaryReader(fs, Encoding.ASCII, leaveOpen: true);
-
-            // 1. 检查文件头 "PIDX0"
-            byte[] magicBytes = br.ReadBytes(5);
-            string magic = Encoding.ASCII.GetString(magicBytes);
-            if (magic != "PIDX0")
-            {
-                br.Dispose();
-                fs.Dispose();
-                throw new InvalidDataException("文件头不是 PIDX0");
-            }
 
             // 2. 检查 0x8 == 1
             fs.Position = 0x8;

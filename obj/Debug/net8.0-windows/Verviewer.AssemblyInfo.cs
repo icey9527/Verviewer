@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Verviewer")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5aa758afc5631ffa553bfb1436c18e0048406dbe")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+726cfd9e9de49ebcfc4a5fe9ebcb56aa5d59bd84")]
 [assembly: System.Reflection.AssemblyProductAttribute("Verviewer")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Verviewer")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
