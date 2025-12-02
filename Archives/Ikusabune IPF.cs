@@ -13,10 +13,9 @@ using Verviewer.Core;
 namespace Verviewer.Archives
 {
     [ArchivePlugin(
-        archiveId: "Ikusabune IPF",
+        id: "Ikusabune IPF",
         extensions: new[] { "pak" },
-        magic: "IPF ",
-        preferredImageId: "Ikusabune T32, Ikusabune TBM"
+        magics: new[] { "IPF " }
     )]
     internal sealed class IkusabuneIpfArchiveHandler : IArchiveHandler
     {
@@ -59,7 +58,7 @@ namespace Verviewer.Archives
                 uint hashU = unchecked((uint)hash);
 
                 if (!NameByHash.TryGetValue(hashU, out var path))
-                    path = $"{hashU:X8}.z0";
+                    path = $"${hashU:X8}";
 
                 entries.Add(new ArchiveEntry
                 {

@@ -9,7 +9,7 @@ namespace Verviewer.Images
     [ImagePlugin(
         id: "Ikusabune T32",
         extensions: new[] { "t32" },
-        magic: "T32 "
+        magics: new[] { "T32 " }
     )]
     internal sealed class IkusabuneT32ImageHandler : IImageHandler
     {
@@ -32,8 +32,6 @@ namespace Verviewer.Images
 
         public Image? TryDecode(byte[] data, string extension)
         {
-            if (!extension.Equals(".t32", StringComparison.OrdinalIgnoreCase))
-                return null;
             if (data == null || data.Length < 32)
                 return null;
 

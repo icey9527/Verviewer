@@ -1,140 +1,211 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Reflection;
-using Verviewer.Core;
+using System.Text;
 
-namespace Verviewer.Core
+internal static class PluginFactory
 {
-    /// <summary>
-    /// 插件工厂：通过特性 + 反射自动收集封包插件和图片插件。
-    /// 不需要 CSV，不需要手动注册。
-    /// </summary>
-    internal static class PluginFactory
+    private sealed class ArchiveMeta
     {
-        private static bool _initialized;
+        public Type Type = null!;
+        public string Id = "";
+        public string[] Ext = Array.Empty<string>();
+        public byte[][] Magic = Array.Empty<byte[]>();
+    }
 
-        private static readonly List<ArchiveRule> _archiveRules = new();
-        private static readonly Dictionary<string, Type> _archiveTypes =
-            new(StringComparer.OrdinalIgnoreCase);
+    private sealed class ImageMeta
+    {
+        public Type Type = null!;
+        public string Id = "";
+        public string[] Ext = Array.Empty<string>();
+        public byte[][] Magic = Array.Empty<byte[]>();
+    }
 
-        private static readonly List<IImageHandler> _imageHandlers = new();
-        private static readonly Dictionary<IImageHandler, string> _imageNames =
-            new();
-        private static readonly Dictionary<IImageHandler, ImagePluginAttribute> _imageAttrs =
-            new();
+    private static bool _built;
+    private static readonly List<ArchiveMeta> _archives = new();
+    private static readonly List<ImageMeta> _images = new();
+    private static int _maxArcHead;
+    private static int _maxImgHead;
 
-        /// <summary>封包规则列表，供 MainForm 使用。</summary>
-        public static IReadOnlyList<ArchiveRule> ArchiveRules
+    private static void EnsureBuilt()
+    {
+        if (_built) return;
+        Build(AppDomain.CurrentDomain.GetAssemblies());
+        _built = true;
+    }
+
+    private static void Build(IEnumerable<Assembly> assemblies)
+    {
+        _archives.Clear(); _images.Clear();
+        _maxArcHead = 0; _maxImgHead = 0;
+
+        foreach (var asm in assemblies)
         {
-            get { EnsureInitialized(); return _archiveRules; }
-        }
-
-        /// <summary>所有图片插件实例。</summary>
-        public static IReadOnlyList<IImageHandler> ImageHandlers
-        {
-            get { EnsureInitialized(); return _imageHandlers; }
-        }
-
-        private static void EnsureInitialized()
-        {
-            if (_initialized) return;
-
-            var asm = Assembly.GetExecutingAssembly();
-
-            // === 扫描封包插件（带 [ArchivePlugin] 且实现 IArchiveHandler） ===
-            foreach (var t in asm.GetTypes())
+            Type[] types; try { types = asm.GetTypes(); } catch { continue; }
+            foreach (var t in types)
             {
-                if (t.IsAbstract || !typeof(IArchiveHandler).IsAssignableFrom(t))
-                    continue;
-
-                var attr = t.GetCustomAttribute<ArchivePluginAttribute>();
-                if (attr == null)
-                    continue;
-
-                // 记录类型映射：ArchiveId -> Type
-                _archiveTypes[attr.ArchiveId] = t;
-
-                // 为每个扩展名生成一条规则；若无扩展名则只按魔数匹配
-                if (attr.Extensions.Length > 0)
+                var ap = t.GetCustomAttribute<ArchivePluginAttribute>();
+                if (ap != null)
                 {
-                    foreach (var ext in attr.Extensions)
+                    var m = new ArchiveMeta
                     {
-                        var rule = new ArchiveRule
-                        {
-                            Extension = string.IsNullOrWhiteSpace(ext)
-                                ? null
-                                : ext.TrimStart('.').ToLowerInvariant(),
-                            MagicBytes = attr.MagicBytes,
-                            ArchiveId = attr.ArchiveId,
-                            PreferredImageIds = attr.PreferredImageIds
-                        };
-                        _archiveRules.Add(rule);
-                    }
-                }
-                else
-                {
-                    var rule = new ArchiveRule
-                    {
-                        Extension = null,
-                        MagicBytes = attr.MagicBytes,
-                        ArchiveId = attr.ArchiveId,
-                        PreferredImageIds = attr.PreferredImageIds
+                        Type = t,
+                        Id = ap.Id,
+                        Ext = (ap.Extensions ?? Array.Empty<string>()).Select(NormExt).ToArray(),
+                        Magic = ParseMany(ap.Magics)
                     };
-                    _archiveRules.Add(rule);
+                    if (m.Ext.Length == 0 && m.Magic.Length == 0) continue;
+                    _archives.Add(m);
+                    if (m.Magic.Length > 0) _maxArcHead = Math.Max(_maxArcHead, m.Magic.Max(x => x.Length));
                 }
-            }
 
-            // === 扫描图片插件（带 [ImagePlugin] 且实现 IImageHandler） ===
-            foreach (var t in asm.GetTypes())
-            {
-                if (t.IsAbstract || !typeof(IImageHandler).IsAssignableFrom(t))
-                    continue;
-
-                var attr = t.GetCustomAttribute<ImagePluginAttribute>();
-                if (attr == null)
-                    continue;
-
-                if (Activator.CreateInstance(t) is IImageHandler inst)
+                var ip = t.GetCustomAttribute<ImagePluginAttribute>();
+                if (ip != null)
                 {
-                    _imageHandlers.Add(inst);
-                    _imageNames[inst] = attr.Id;
-                    _imageAttrs[inst] = attr;
+                    var m = new ImageMeta
+                    {
+                        Type = t,
+                        Id = ip.Id,
+                        Ext = (ip.Extensions ?? Array.Empty<string>()).Select(NormExt).ToArray(),
+                        Magic = ParseMany(ip.Magics)
+                    };
+                    if (m.Ext.Length == 0 && m.Magic.Length == 0) continue;
+                    _images.Add(m);
+                    if (m.Magic.Length > 0) _maxImgHead = Math.Max(_maxImgHead, m.Magic.Max(x => x.Length));
                 }
             }
-
-            _initialized = true;
         }
+    }
 
-        /// <summary>根据 ArchiveId 创建封包插件实例。</summary>
-        public static IArchiveHandler? CreateArchiveHandler(string archiveId)
+    private static string NormExt(string s)
+    {
+        var e = (s ?? "").Trim();
+        if (e.StartsWith(".")) e = e[1..];
+        return e.ToLowerInvariant();
+    }
+
+    private static string GetExt(string? nameOrExt)
+    {
+        if (string.IsNullOrWhiteSpace(nameOrExt)) return "";
+        var s = nameOrExt.Trim();
+        var e = Path.GetExtension(s);
+        return string.IsNullOrEmpty(e) ? NormExt(s) : NormExt(e);
+    }
+
+    private static byte[][] ParseMany(string[]? magics)
+    {
+        if (magics == null || magics.Length == 0) return Array.Empty<byte[]>();
+        var list = new List<byte[]>(magics.Length);
+        foreach (var s in magics)
         {
-            EnsureInitialized();
-            if (_archiveTypes.TryGetValue(archiveId, out var t))
+            if (string.IsNullOrWhiteSpace(s)) continue;
+            var x = s.Trim();
+            if (x.StartsWith("hex:", StringComparison.OrdinalIgnoreCase))
             {
-                return (IArchiveHandler?)Activator.CreateInstance(t);
+                var hex = new string(x.AsSpan(4).ToString().Where(c => !char.IsWhiteSpace(c) && c != ',').ToArray());
+                if (hex.Length % 2 != 0) continue;
+                var bytes = new byte[hex.Length / 2];
+                for (int i = 0; i < bytes.Length; i++)
+                    bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+                list.Add(bytes);
             }
-            return null;
+            else
+            {
+                list.Add(Encoding.ASCII.GetBytes(x));
+            }
+        }
+        return list.ToArray();
+    }
+
+    private static bool StartsWithAny(ReadOnlySpan<byte> head, byte[][] patterns, out int matchedLen)
+    {
+        matchedLen = 0;
+        if (patterns == null || patterns.Length == 0) return false;
+        foreach (var p in patterns)
+        {
+            if (p.Length == 0 || p.Length > head.Length) continue;
+            if (head.Slice(0, p.Length).SequenceEqual(p))
+                matchedLen = Math.Max(matchedLen, p.Length);
+        }
+        return matchedLen > 0;
+    }
+
+    private static byte[] ReadHeader(Stream s, int len)
+    {
+        if (len <= 0) return Array.Empty<byte>();
+        long pos = s.CanSeek ? s.Position : 0;
+        try
+        {
+            if (s.CanSeek) s.Position = 0;
+            var buf = new byte[len];
+            int read = 0;
+            while (read < len)
+            {
+                int r = s.Read(buf, read, len - read);
+                if (r <= 0) break;
+                read += r;
+            }
+            if (read == buf.Length) return buf;
+            Array.Resize(ref buf, read);
+            return buf;
+        }
+        finally
+        {
+            if (s.CanSeek) s.Position = pos;
+        }
+    }
+
+    public static Type? ResolveArchiveType(string path, Stream s)
+    {
+        EnsureBuilt();
+        var ext = GetExt(path);
+        var head = ReadHeader(s, _maxArcHead);
+
+        var list = new List<(ArchiveMeta p, int score, int magicLen)>();
+        foreach (var p in _archives)
+        {
+            bool extHit = ext.Length > 0 && p.Ext.Contains(ext, StringComparer.OrdinalIgnoreCase);
+            int len = 0;
+            bool magicHit = p.Magic.Length > 0 && StartsWithAny(head, p.Magic, out len);
+            if (!(extHit || magicHit)) continue;
+            int score = (extHit ? 1 : 0) + (magicHit ? 2 : 0);
+            list.Add((p, score, len));
         }
 
-        /// <summary>返回所有图片插件实例列表。</summary>
-        public static IReadOnlyList<IImageHandler> CreateAllImageHandlers()
+        var picked = list
+            .OrderByDescending(x => x.score)
+            .ThenByDescending(x => x.magicLen)
+            .ThenBy(x => x.p.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        return picked.p?.Type;
+    }
+
+    public static Type? ResolveImageType(string? nameOrExt, ReadOnlySpan<byte> data)
+    {
+        EnsureBuilt();
+        var ext = GetExt(nameOrExt);
+        var head = data.Slice(0, Math.Min(_maxImgHead, data.Length)).ToArray();
+
+        var list = new List<(ImageMeta p, int score, int magicLen)>();
+        foreach (var p in _images)
         {
-            EnsureInitialized();
-            return _imageHandlers;
+            bool extHit = ext.Length > 0 && p.Ext.Contains(ext, StringComparer.OrdinalIgnoreCase);
+            int len = 0;
+            bool magicHit = p.Magic.Length > 0 && StartsWithAny(head, p.Magic, out len);
+            if (!(extHit || magicHit)) continue;
+            int score = (extHit ? 1 : 0) + (magicHit ? 2 : 0);
+            list.Add((p, score, len));
         }
 
-        /// <summary>反查图片插件名，用于状态栏显示。</summary>
-        public static string? GetImagePluginName(IImageHandler handler)
-        {
-            EnsureInitialized();
-            return _imageNames.TryGetValue(handler, out var name) ? name : null;
-        }
+        var picked = list
+            .OrderByDescending(x => x.score)
+            .ThenByDescending(x => x.magicLen)
+            .ThenBy(x => x.p.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
 
-        /// <summary>获取某个图片插件的 Attribute 信息（扩展名、Magic）。</summary>
-        public static ImagePluginAttribute? GetImagePluginAttribute(IImageHandler handler)
-        {
-            EnsureInitialized();
-            return _imageAttrs.TryGetValue(handler, out var attr) ? attr : null;
-        }
+        return picked.p?.Type;
     }
 }

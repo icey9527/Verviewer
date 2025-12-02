@@ -148,16 +148,11 @@ namespace Verviewer.Archives
         }
     }
 
-    /// <summary>
-    /// 处理 ARTDINK DAT 封包（PIDX0），支持：
-    /// 1. 传统 DAT 索引格式；
-    /// 2. DAT 内嵌 FSTS 子包（process_pidx0 那一套）。
-    /// </summary>
     [ArchivePlugin(
-        archiveId: "Artdink DAT",
+        id: "Artdink DAT",
         extensions: new[] { "dat" },
-        magic: "PIDX0",
-        preferredImageId: "Artdink AGI,Artdink TXF,Artdink FAC,Artdink TEX")]
+        magics: new[] { "PIDX0" }
+        )]
     internal class DatArchiveHandler : IArchiveHandler
     {
         // 这个 Id 现在只是多余字段，你可以留着当注释。

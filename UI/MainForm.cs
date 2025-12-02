@@ -26,14 +26,10 @@ namespace Verviewer.UI
         private ToolStripControlHost _zoomHost = null!;
         private ComboBox _comboEncoding = null!; // 状态栏里的编码选择
 
-        // 规则 & 插件
-        private List<ArchiveRule> _archiveRules = new();
-        private readonly List<IImageHandler> _imageHandlers = new();
-
         // 按需打开的封包
         private OpenedArchive? _currentArchive;
-        private string? _currentArchiveRuleName;     // ArchiveId（例如 "ARTDINK DAT"）
-        private string? _currentImageHandlerName;    // 当前预览实际用到的图片插件名（"agi"/"builtin"/null）
+        private string? _currentArchiveRuleName;     // 当前封包插件 Id
+        private string? _currentImageHandlerName;    // 当前图片插件 Id（或 "builtin"/null）
         private string? _lastSelectedEntryPath;      // 当前选中的 ArchiveEntry.Path
 
         // 图片缩放相关
@@ -56,15 +52,9 @@ namespace Verviewer.UI
 
         private void InitializeConfigAndHandlers()
         {
-            // 通过 PluginFactory 反射收集所有封包规则和图片插件
-            _archiveRules = PluginFactory.ArchiveRules.ToList();
-
-            _imageHandlers.Clear();
-            foreach (var img in PluginFactory.CreateAllImageHandlers())
-            {
-                _imageHandlers.Add(img);
-            }
+            // 新版不需要预先收集规则/插件，PluginFactory 在 Resolve 时按需构建
         }
+
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
@@ -118,12 +108,12 @@ namespace Verviewer.UI
             _currentArchive = null;
         }
 
-        /// <summary>当前插件状态字符串（左下角显示）。</summary>
+        // 左下角显示
         private string CurrentPluginStatus
             => $"封包: {_currentArchiveRuleName ?? "-"}    图片: {_currentImageHandlerName ?? "-"}";
 
-        /// <summary>更新底部状态栏。</summary>
-        private void UpdateStatus(string left, string right)
+        // 更新底部状态栏（right 允许为 null，消除可空告警）
+        private void UpdateStatus(string left, string? right)
         {
             if (_statusLeft != null) _statusLeft.Text = left ?? string.Empty;
             if (_statusRight != null) _statusRight.Text = right ?? string.Empty;

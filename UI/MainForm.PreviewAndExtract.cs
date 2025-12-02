@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -31,32 +32,29 @@ namespace Verviewer.UI
 
         private void OpenArchive(string archivePath)
         {
-            if (_archiveRules.Count == 0)
+            // 用解析器按“扩展名或魔术”挑选插件
+            using var fsProbe = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var type = PluginFactory.ResolveArchiveType(archivePath, fsProbe);
+            if (type == null)
             {
-                MessageBox.Show(this, "没有找到任何封包插件，请确认插件类已加 [ArchivePlugin] 特性。",
-                    "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            var rule = DetectArchiveRule(archivePath);
-            if (rule == null)
-            {
-                MessageBox.Show(this, "没有找到可以处理这个封包的规则。", "无法打开",
+                MessageBox.Show(this, "没有找到可以处理这个封包的插件。", "无法打开",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            var handler = PluginFactory.CreateArchiveHandler(rule.ArchiveId);
+            var handler = (IArchiveHandler?)Activator.CreateInstance(type);
             if (handler == null)
             {
-                MessageBox.Show(this, $"当前未实现封包插件：{rule.ArchiveId}", "无法打开",
+                MessageBox.Show(this, $"无法创建封包处理器：{type.FullName}", "无法打开",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             _currentArchive?.Dispose();
             _currentArchive = null;
-            _currentArchiveRuleName = rule.ArchiveId;
+
+            var attr = type.GetCustomAttribute<ArchivePluginAttribute>();
+            _currentArchiveRuleName = attr?.Id ?? type.Name;
             _currentImageHandlerName = null;
             _lastSelectedEntryPath = null;
 
@@ -75,54 +73,6 @@ namespace Verviewer.UI
             UpdateStatus(CurrentPluginStatus, string.Empty);
 
             BuildTreeFromEntries();
-        }
-
-        private ArchiveRule? DetectArchiveRule(string archivePath)
-        {
-            string ext = Path.GetExtension(archivePath) ?? string.Empty;
-            ext = ext.TrimStart('.').ToLowerInvariant();
-
-            byte[] header = new byte[32];
-            using (var fs = File.OpenRead(archivePath))
-            {
-                int read = fs.Read(header, 0, header.Length);
-                if (read < header.Length)
-                    Array.Resize(ref header, read);
-            }
-
-            foreach (var rule in _archiveRules)
-            {
-                bool ok = true;
-
-                if (!string.IsNullOrEmpty(rule.Extension))
-                {
-                    if (!ext.Equals(rule.Extension, StringComparison.OrdinalIgnoreCase))
-                        ok = false;
-                }
-
-                if (ok && rule.MagicBytes is { Length: > 0 })
-                {
-                    if (header.Length < rule.MagicBytes.Length)
-                    {
-                        ok = false;
-                    }
-                    else
-                    {
-                        for (int i = 0; i < rule.MagicBytes.Length; i++)
-                        {
-                            if (header[i] != rule.MagicBytes[i])
-                            {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (ok) return rule;
-            }
-
-            return null;
         }
 
         #endregion
@@ -241,7 +191,7 @@ namespace Verviewer.UI
             if (_currentArchive == null)
                 return;
 
-            // 1. 按需从封包里读取这个条目的数据
+            // 读条目数据
             byte[] data;
             using (var stream = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry))
             using (var ms = new MemoryStream())
@@ -250,94 +200,35 @@ namespace Verviewer.UI
                 data = ms.ToArray();
             }
 
-            string ext = Path.GetExtension(entry.Path) ?? string.Empty;
-            ext = ext.ToLowerInvariant();
+            string ext = (Path.GetExtension(entry.Path) ?? string.Empty).ToLowerInvariant();
 
-            // 提前读一点头部用于 Magic 匹配（比如前 16 字节）
-            byte[] header = new byte[Math.Min(16, data.Length)];
-            Array.Copy(data, header, header.Length);
+            // 用统一解析器选图片插件；失败再退回 GDI/文本
+            Image? decoded = null;
+            string pluginName = "builtin";
 
-            // 2. 根据扩展名 + Magic 过滤出候选图片插件
-            var candidates = new List<IImageHandler>();
-            foreach (var handler in _imageHandlers)
+            var imgType = PluginFactory.ResolveImageType(entry.Path, data);
+            if (imgType != null)
             {
-                var attr = PluginFactory.GetImagePluginAttribute(handler);
-                if (attr == null)
+                var imgHandler = (IImageHandler?)Activator.CreateInstance(imgType);
+                if (imgHandler != null)
                 {
-                    // 没有 Attribute 的插件，全都算候选（你现在基本不会有这种）
-                    candidates.Add(handler);
-                    continue;
-                }
-
-                bool extMatch = false;
-                if (attr.Extensions.Length == 0)
-                {
-                    extMatch = true; // 没写扩展名 = 不限制扩展名
-                }
-                else
-                {
-                    foreach (var e in attr.Extensions)
-                    {
-                        if (string.IsNullOrWhiteSpace(e)) continue;
-                        string norm = e.StartsWith(".") ? e.ToLowerInvariant() : ("." + e.ToLowerInvariant());
-                        if (ext == norm)
-                        {
-                            extMatch = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!extMatch)
-                    continue;
-
-                // Magic 匹配（可选）
-                bool magicMatch = true;
-                if (attr.MagicBytes.Length > 0)
-                {
-                    if (header.Length < attr.MagicBytes.Length)
-                    {
-                        magicMatch = false;
-                    }
-                    else
-                    {
-                        for (int i = 0; i < attr.MagicBytes.Length; i++)
-                        {
-                            if (header[i] != attr.MagicBytes[i])
-                            {
-                                magicMatch = false;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (magicMatch)
-                    candidates.Add(handler);
-            }
-
-            // 如果一个候选都没有，就退回到“尝试所有插件”
-            if (candidates.Count == 0)
-                candidates.AddRange(_imageHandlers);
-
-            // 3. 先尝试候选图片插件
-            foreach (var handler in candidates)
-            {
-                var img = handler.TryDecode(data, ext);
-                if (img != null)
-                {
-                    string pluginName = PluginFactory.GetImagePluginName(handler) ?? "unknown";
-                    ShowImage(img, pluginName);
-                    return;
+                    decoded = imgHandler.TryDecode(data, ext);
+                    var a = imgType.GetCustomAttribute<ImagePluginAttribute>();
+                    pluginName = a?.Id ?? imgType.Name;
                 }
             }
 
-            // 4. 再尝试 GDI
+            if (decoded != null)
+            {
+                ShowImage(decoded, pluginName);
+                return;
+            }
+
             try
             {
                 using var ms = new MemoryStream(data);
-                var img = Image.FromStream(ms);
-                ShowImage(img, "builtin");
+                var gdiImg = Image.FromStream(ms);
+                ShowImage(gdiImg, "builtin");
                 return;
             }
             catch
@@ -345,7 +236,6 @@ namespace Verviewer.UI
                 // 不是正常图片，就当文本处理
             }
 
-            // 5. 文本
             ShowText(data);
         }
 
@@ -512,14 +402,14 @@ namespace Verviewer.UI
 
             try
             {
-            return name switch
-            {
-                "utf-8" => Encoding.UTF8,
-                "gb18030" => Encoding.GetEncoding("gb18030"),
-                "cp936" => Encoding.GetEncoding(936), // 新增：cp936 对应 GB2312
-                "cp932" or "shift_jis" or null => Encoding.GetEncoding(932),
-                _ => Encoding.UTF8
-            };
+                return name switch
+                {
+                    "utf-8" => Encoding.UTF8,
+                    "gb18030" => Encoding.GetEncoding("gb18030"),
+                    "cp936" => Encoding.GetEncoding(936),
+                    "cp932" or "shift_jis" or null => Encoding.GetEncoding(932),
+                    _ => Encoding.UTF8
+                };
             }
             catch
             {
@@ -529,7 +419,6 @@ namespace Verviewer.UI
 
         private void ComboEncoding_SelectedIndexChanged(object? sender, EventArgs e)
         {
-            // 只在文本模式下重新解析当前条目
             if (_currentArchive == null || _lastSelectedEntryPath == null)
                 return;
             if (!_txtPreview.Visible)
@@ -634,14 +523,14 @@ namespace Verviewer.UI
 
                                 Image? img = null;
 
-                                // 先试所有图片插件（比如 AGI）
-                                foreach (var handler in _imageHandlers)
+                                var imgType = PluginFactory.ResolveImageType("." + ext, data);
+                                if (imgType != null)
                                 {
-                                    img = handler.TryDecode(data, "." + ext);
-                                    if (img != null) break;
+                                    var imgHandler = (IImageHandler?)Activator.CreateInstance(imgType);
+                                    if (imgHandler != null)
+                                        img = imgHandler.TryDecode(data, "." + ext);
                                 }
 
-                                // 再试 GDI
                                 if (img == null)
                                 {
                                     using var ms2 = new MemoryStream(data);
@@ -670,7 +559,6 @@ namespace Verviewer.UI
                             }
                         }
 
-                        // 普通复制
                         using (var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry))
                         using (var outFs = new FileStream(destPath, FileMode.Create, FileAccess.Write))
                         {
