@@ -1,4 +1,4 @@
-name: Build (test branch publish)
+name: Build and publish to test
 
 on:
   push:
@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # 允许推 test 分支
+  contents: write
 
 jobs:
-  build-windows:
+  build-win:
     runs-on: windows-latest
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
@@ -19,25 +19,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-          # 先不要开缓存，否则会因为没有 packages.lock.json 报错
-          # cache: true
+          # 不用 NuGet 缓存，避免 packages.lock.json 报错
+          # cache: false
 
-      - name: Restore
+      - name: Restore (no RID)
         run: dotnet restore
+
+      - name: Restore (win-x64)
+        run: dotnet restore -r win-x64
 
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
-      # 框架依赖（不带运行时）；输出到 out/win-fdd
-      - name: Publish (framework-dependent)
+      # 不带运行时（框架依赖）
+      - name: Publish FDD (framework-dependent)
         run: dotnet publish Verviewer.csproj -c Release -o out/win-fdd --no-restore
 
-      # 自包含（带运行时）单文件；输出到 out/win-scd
-      - name: Publish (self-contained single-file)
+      # 带运行时（自包含，单文件）
+      - name: Publish SCD (self-contained single-file)
         run: >
           dotnet publish Verviewer.csproj -c Release
           -r win-x64 --self-contained true
@@ -47,26 +50,19 @@ jobs:
           -o out/win-scd
           --no-restore
 
-      - name: Zip self-contained
+      - name: Zip artifacts
+        shell: pwsh
         run: |
-          powershell Compress-Archive -Path out\win-scd\* -DestinationPath out\Verviewer-win-x64-selfcontained.zip
+          mkdir dist
+          Compress-Archive -Path out/win-fdd/* -DestinationPath dist/Verviewer-win-framework-dependent.zip
+          Compress-Archive -Path out/win-scd/* -DestinationPath dist/Verviewer-win-x64-selfcontained.zip
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-builds
-          path: |
-            out/win-fdd/**
-            out/Verviewer-win-x64-selfcontained.zip
+          name: windows-artifacts
+          path: dist/*
 
-      # 准备要推送到 test 分支的目录（把两种产物都放进去）
-      - name: Prepare dist folder
-        run: |
-          mkdir dist
-          copy out\Verviewer-win-x64-selfcontained.zip dist\
-          powershell Compress-Archive -Path out\win-fdd\* -DestinationPath dist\Verviewer-win-framework-dependent.zip
-
-      # 推送到 test 分支（分支不存在会自动创建/覆盖）
       - name: Publish to test branch
         uses: peaceiris/actions-gh-pages@v3
         with:
