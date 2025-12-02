@@ -29,6 +29,8 @@ internal static class PluginFactory
     private static int _maxArcHead;
     private static int _maxImgHead;
 
+    public static int MaxImageHeaderLength => _maxImgHead;
+
     private static void EnsureBuilt()
     {
         if (_built) return;

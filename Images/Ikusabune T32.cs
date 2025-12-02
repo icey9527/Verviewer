@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Runtime.InteropServices;
 using Verviewer.Core;
 
@@ -9,7 +10,7 @@ namespace Verviewer.Images
     [ImagePlugin(
         id: "Ikusabune T32",
         extensions: new[] { "t32" },
-        magics: new[] { "T32 " }
+        magics: new[] { "T32 ", "T8aB", "T4aB", "T1aB", "4444", "1555" }
     )]
     internal sealed class IkusabuneT32ImageHandler : IImageHandler
     {
@@ -30,33 +31,26 @@ namespace Verviewer.Images
             public int OffsetBase;
         }
 
-        public Image? TryDecode(byte[] data, string extension)
+        public Image? TryDecode(Stream stream, string? ext)
         {
-            if (data == null || data.Length < 32)
-                return null;
-
+            Stream s = EnsureSeekable(stream);
             try
             {
-                if (!ReadHeader(data, out var h))
-                    return null;
+                if (!s.CanSeek || s.Length < 32) return null;
 
-                if (h.W <= 0 || h.H <= 0 || h.Parts < 0)
-                    return null;
-
+                if (!ReadHeader(s, out var h)) return null;
+                if (h.W <= 0 || h.H <= 0 || h.Parts < 0) return null;
                 long pixels = (long)h.W * h.H;
-                if (pixels <= 0 || pixels > 10000L * 10000L)
-                    return null;
+                if (pixels <= 0 || pixels > 10000L * 10000L) return null;
 
                 int stride = checked(h.W * 4);
                 var full = new byte[checked(stride * h.H)];
 
-                if (!FillImage(data, h, full, stride))
-                    return null;
+                if (!FillImage(s, h, full, stride)) return null;
 
                 var bmp = new Bitmap(h.W, h.H, PixelFormat.Format32bppArgb);
                 var rect = new Rectangle(0, 0, h.W, h.H);
                 var bd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-
                 try
                 {
                     if (bd.Stride == stride)
@@ -83,15 +77,16 @@ namespace Verviewer.Images
             {
                 return null;
             }
+            finally
+            {
+                if (!ReferenceEquals(s, stream)) s.Dispose();
+            }
         }
 
-        static bool ReadHeader(byte[] data, out T32Header h)
+        static bool ReadHeader(Stream s, out T32Header h)
         {
             h = default;
-            if (data.Length < 32)
-                return false;
-
-            int raw = BitConverter.ToInt32(data, 0);
+            int raw = ReadInt32At(s, 0);
             int magic;
             bool old;
 
@@ -100,133 +95,93 @@ namespace Verviewer.Images
                 case MagicT1:
                 case MagicT4:
                 case MagicT8:
-                    magic = raw;
-                    old = false;
-                    break;
+                    magic = raw; old = false; break;
                 case OldT8:
-                    magic = MagicT8;
-                    old = true;
-                    break;
+                    magic = MagicT8; old = true; break;
                 case OldT4:
-                    magic = MagicT4;
-                    old = true;
-                    break;
+                    magic = MagicT4; old = true; break;
                 case OldT1:
-                    magic = MagicT1;
-                    old = true;
-                    break;
+                    magic = MagicT1; old = true; break;
                 default:
                     return false;
             }
 
             int baseOffset = old ? 32 : 36;
-            if (data.Length < baseOffset)
-                return false;
+            int w = ReadInt32At(s, 20);
+            int hh = ReadInt32At(s, 24);
+            int parts = ReadInt32At(s, 28);
 
-            int w = BitConverter.ToInt32(data, 20);
-            int hh = BitConverter.ToInt32(data, 24);
-            int parts = BitConverter.ToInt32(data, 28);
-
-            h = new T32Header
-            {
-                Magic = magic,
-                W = w,
-                H = hh,
-                Parts = parts,
-                OffsetBase = baseOffset
-            };
-
+            h = new T32Header { Magic = magic, W = w, H = hh, Parts = parts, OffsetBase = baseOffset };
             return true;
         }
 
-        static bool FillImage(byte[] data, T32Header h, byte[] full, int fullStride)
+        static bool FillImage(Stream s, T32Header h, byte[] full, int fullStride)
         {
-            int width = h.W;
-            int height = h.H;
+            int width = h.W, height = h.H;
 
             int tableBytes;
-            try
-            {
-                tableBytes = checked(h.Parts * 4);
-            }
-            catch
-            {
-                return false;
-            }
-
-            if (h.OffsetBase < 0 || h.OffsetBase + tableBytes > data.Length)
-                return false;
+            try { tableBytes = checked(h.Parts * 4); } catch { return false; }
+            if (h.OffsetBase < 0 || h.OffsetBase + tableBytes > s.Length) return false;
 
             for (int i = 0; i < h.Parts; i++)
             {
                 int ofsPos = h.OffsetBase + i * 4;
-                if (ofsPos < 0 || ofsPos + 4 > data.Length)
-                    return false;
+                int ofs = ReadInt32At(s, ofsPos);
+                if (ofs < 0 || ofs + 16 > s.Length) return false;
 
-                int ofs = BitConverter.ToInt32(data, ofsPos);
-                if (ofs < 0 || ofs + 16 > data.Length)
-                    return false;
+                int px = ReadInt32At(s, ofs + 0);
+                int py = ReadInt32At(s, ofs + 4);
+                int pw = ReadInt32At(s, ofs + 8);
+                int ph = ReadInt32At(s, ofs + 12);
 
-                int px = BitConverter.ToInt32(data, ofs + 0);
-                int py = BitConverter.ToInt32(data, ofs + 4);
-                int pw = BitConverter.ToInt32(data, ofs + 8);
-                int ph = BitConverter.ToInt32(data, ofs + 12);
+                if (pw <= 0 || ph <= 0) continue;
+                if (px < 0 || py < 0) return false;
+                if (px >= width || py >= height) continue;
 
-                if (pw <= 0 || ph <= 0)
-                    continue;
-                if (px < 0 || py < 0)
-                    return false;
-                if (px >= width || py >= height)
-                    continue;
-
-                int cw = pw;
-                int ch = ph;
+                int cw = pw, ch = ph;
                 if (px + cw > width) cw = width - px;
                 if (py + ch > height) ch = height - py;
-                if (cw <= 0 || ch <= 0)
-                    continue;
+                if (cw <= 0 || ch <= 0) continue;
 
                 int bpp = (h.Magic == MagicT8) ? 4 : 2;
                 int pitch = Align4(checked(pw * bpp));
 
                 long start = (long)ofs + 16;
                 long total = (long)pitch * ph;
-                if (start < 0 || start + total > data.Length)
-                    return false;
+                if (start < 0 || start + total > s.Length) return false;
+
+                s.Position = start;
 
                 if (h.Magic == MagicT8)
                 {
+                    var rowBuf = new byte[pitch];
                     for (int row = 0; row < ch; row++)
                     {
-                        int src = (int)(start + row * (long)pitch);
+                        ReadExactlyInto(s, rowBuf, 0, pitch);
                         int dst = (py + row) * fullStride + px * 4;
-                        Buffer.BlockCopy(data, src, full, dst, cw * 4);
+                        Buffer.BlockCopy(rowBuf, 0, full, dst, cw * 4);
                     }
                 }
                 else
                 {
                     bool is1555 = h.Magic == MagicT1;
+                    var rowBuf = new byte[pitch];
                     for (int row = 0; row < ch; row++)
                     {
-                        int srcRow = (int)(start + row * (long)pitch);
-                        int dstRow = (py + row) * fullStride + px * 4;
-
+                        ReadExactlyInto(s, rowBuf, 0, pitch);
                         for (int col = 0; col < cw; col++)
                         {
-                            int srcIndex = srcRow + col * 2;
-                            ushort v = (ushort)(data[srcIndex] | (data[srcIndex + 1] << 8));
-
+                            int si = col * 2;
+                            ushort v = (ushort)(rowBuf[si] | (rowBuf[si + 1] << 8));
                             byte a, r, g, b;
-                            if (is1555)
-                                From1555(v, out a, out r, out g, out b);
-                            else
-                                From4444(v, out a, out r, out g, out b);
+                            if (is1555) From1555(v, out a, out r, out g, out b);
+                            else From4444(v, out a, out r, out g, out b);
 
-                            int dstIndex = dstRow + col * 4;
-                            full[dstIndex + 0] = b;
-                            full[dstIndex + 1] = g;
-                            full[dstIndex + 2] = r;
-                            full[dstIndex + 3] = a;
+                            int di = (py + row) * fullStride + (px + col) * 4;
+                            full[di + 0] = b;
+                            full[di + 1] = g;
+                            full[di + 2] = r;
+                            full[di + 3] = a;
                         }
                     }
                 }
@@ -258,6 +213,36 @@ namespace Verviewer.Images
             r = (byte)((r4 << 4) | r4);
             g = (byte)((g4 << 4) | g4);
             b = (byte)((b4 << 4) | b4);
+        }
+
+        static int ReadInt32At(Stream s, long off)
+        {
+            long save = s.Position;
+            s.Position = off;
+            int b0 = s.ReadByte(), b1 = s.ReadByte(), b2 = s.ReadByte(), b3 = s.ReadByte();
+            s.Position = save;
+            if ((b0 | b1 | b2 | b3) < 0) return 0;
+            return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+        }
+
+        static void ReadExactlyInto(Stream s, byte[] buf, int offset, int count)
+        {
+            int total = 0;
+            while (total < count)
+            {
+                int r = s.Read(buf, offset + total, count - total);
+                if (r <= 0) throw new EndOfStreamException();
+                total += r;
+            }
+        }
+
+        static Stream EnsureSeekable(Stream s)
+        {
+            if (s.CanSeek) return s;
+            var ms = new MemoryStream();
+            s.CopyTo(ms);
+            ms.Position = 0;
+            return ms;
         }
     }
 }

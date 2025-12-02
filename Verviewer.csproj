@@ -11,6 +11,7 @@
     <!-- 单文件发布配置 -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
+    <ApplicationIcon>Misc/ver.ico</ApplicationIcon>
 
 
   </PropertyGroup>

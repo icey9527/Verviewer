@@ -1,72 +1,72 @@
-name: Build and publish to test
+name: Nightly pre-release
 
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+on: push: branches: [ main ] workflow_dispatch:
 
-permissions:
-  contents: write
+permissions: contents: write
 
-jobs:
-  build-win:
-    runs-on: windows-latest
-    env:
-      DOTNET_CLI_TELEMETRY_OPTOUT: 1
-      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+jobs: build-win: runs-on: windows-latest env: DOTNET_CLI_TELEMETRY_OPTOUT: 1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
 
-      - name: Setup .NET 8 SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-          # 不用 NuGet 缓存，避免 packages.lock.json 报错
-          # cache: false
+  - name: Setup .NET
+    uses: actions/setup-dotnet@v4
+    with:
+      dotnet-version: 9.0.x
 
-      - name: Restore (no RID)
-        run: dotnet restore
+  - name: dotnet --info
+    run: dotnet --info
 
-      - name: Restore (win-x64)
-        run: dotnet restore -r win-x64
+  # 两次 restore（一次默认，一次带 RID），避免 TFM/RID 不匹配导致的 NETSDK1047
+  - name: Restore (default)
+    run: dotnet restore
 
-      - name: Build (Release)
-        run: dotnet build -c Release --no-restore
+  - name: Restore (win-x64)
+    run: dotnet restore -r win-x64
 
-      # 不带运行时（框架依赖）
-      - name: Publish FDD (framework-dependent)
-        run: dotnet publish Verviewer.csproj -c Release -o out/win-fdd --no-restore
+  - name: Build (Release)
+    run: dotnet build -c Release --no-restore
 
-      # 带运行时（自包含，单文件）
-      - name: Publish SCD (self-contained single-file)
-        run: >
-          dotnet publish Verviewer.csproj -c Release
-          -r win-x64 --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:DebugType=None -p:DebugSymbols=false
-          -o out/win-scd
-          --no-restore
+  # 不带运行时（框架依赖）
+  - name: Publish framework-dependent
+    run: dotnet publish Verviewer.csproj -c Release -o out/win-fdd --no-restore
 
-      - name: Zip artifacts
-        shell: pwsh
-        run: |
-          mkdir dist
-          Compress-Archive -Path out/win-fdd/* -DestinationPath dist/Verviewer-win-framework-dependent.zip
-          Compress-Archive -Path out/win-scd/* -DestinationPath dist/Verviewer-win-x64-selfcontained.zip
+  # 带运行时（自包含 + 单文件）
+  - name: Publish self-contained single-file
+    run: >
+      dotnet publish Verviewer.csproj -c Release
+      -r win-x64 --self-contained true
+      -p:PublishSingleFile=true
+      -p:IncludeNativeLibrariesForSelfExtract=true
+      -p:DebugType=None -p:DebugSymbols=false
+      -o out/win-scd
+      --no-restore
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-artifacts
-          path: dist/*
+  - name: Zip outputs
+    run: |
+      powershell Compress-Archive -Path out\win-scd\* -DestinationPath out\Verviewer-win-x64-selfcontained.zip
+      powershell Compress-Archive -Path out\win-fdd\* -DestinationPath out\Verviewer-win-framework-dependent.zip
 
-      - name: Publish to test branch
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: test
-          publish_dir: dist
-          keep_files: false
+  # 计算时间和 tag
+  - name: Stamp version
+    shell: pwsh
+    run: |
+      $date = Get-Date -Format "yyyy-MM-dd HH:mm"
+      $tag  = "nightly-" + (Get-Date -Format "yyyyMMdd-HHmm") + "-${{ github.run_number }}"
+      echo "REL_TITLE=最新源码自动构建 $date" >> $env:GITHUB_ENV
+      echo "REL_TAG=$tag" >> $env:GITHUB_ENV
+
+  # 生成预发布（右侧 Releases 页可见）
+  - name: Create GitHub pre-release
+    uses: softprops/action-gh-release@v2
+    with:
+      token: ${{ secrets.GITHUB_TOKEN }}
+      tag_name: ${{ env.REL_TAG }}
+      name: ${{ env.REL_TITLE }}
+      prerelease: true
+      draft: false
+      generate_release_notes: false
+      files: |
+        out/Verviewer-win-x64-selfcontained.zip
+        out/Verviewer-win-framework-dependent.zip

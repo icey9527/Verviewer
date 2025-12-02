@@ -188,33 +188,36 @@ namespace Verviewer.UI
 
         private void PreviewEntry(ArchiveEntry entry)
         {
-            if (_currentArchive == null)
-                return;
+            if (_currentArchive == null) return;
 
-            // 读条目数据
-            byte[] data;
-            using (var stream = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry))
-            using (var ms = new MemoryStream())
+            var ext = Path.GetExtension(entry.Path)?.ToLowerInvariant();
+
+            // 1) 只读头用于选择图片插件
+            byte[] header;
+            int headLen = Math.Max(16, PluginFactory.MaxImageHeaderLength);
+            using (var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry))
             {
-                stream.CopyTo(ms);
-                data = ms.ToArray();
+                header = new byte[headLen];
+                int read = s.Read(header, 0, header.Length);
+                if (read < header.Length) Array.Resize(ref header, read);
             }
 
-            string ext = (Path.GetExtension(entry.Path) ?? string.Empty).ToLowerInvariant();
-
-            // 用统一解析器选图片插件；失败再退回 GDI/文本
+            // 2) 选择插件
+            var imgType = PluginFactory.ResolveImageType(entry.Path, header);
             Image? decoded = null;
             string pluginName = "builtin";
 
-            var imgType = PluginFactory.ResolveImageType(entry.Path, data);
             if (imgType != null)
             {
-                var imgHandler = (IImageHandler?)Activator.CreateInstance(imgType);
-                if (imgHandler != null)
+                var obj = Activator.CreateInstance(imgType);
+                var attr = imgType.GetCustomAttribute<ImagePluginAttribute>();
+                pluginName = attr?.Id ?? imgType.Name;
+
+                // 2a) 流式解码（唯一接口）
+                if (obj is IImageHandler ih)
                 {
-                    decoded = imgHandler.TryDecode(data, ext);
-                    var a = imgType.GetCustomAttribute<ImagePluginAttribute>();
-                    pluginName = a?.Id ?? imgType.Name;
+                    using var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry);
+                    decoded = ih.TryDecode(s, ext);
                 }
             }
 
@@ -224,19 +227,25 @@ namespace Verviewer.UI
                 return;
             }
 
+            // 3) 再尝试 GDI（直接从流创建，再交给 ShowImage 克隆）
             try
             {
-                using var ms = new MemoryStream(data);
-                var gdiImg = Image.FromStream(ms);
+                using var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry);
+                var gdiImg = Image.FromStream(s, useEmbeddedColorManagement: true, validateImageData: true);
                 ShowImage(gdiImg, "builtin");
                 return;
             }
             catch
             {
-                // 不是正常图片，就当文本处理
             }
 
-            ShowText(data);
+            // 4) 文本预览（读全）
+            using (var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry))
+            using (var ms = new MemoryStream())
+            {
+                s.CopyTo(ms);
+                ShowText(ms.ToArray());
+            }
         }
 
         #endregion
@@ -252,11 +261,11 @@ namespace Verviewer.UI
 
             _originalImage?.Dispose();
             _originalImage = new Bitmap(img);
+            img.Dispose(); // 释放传入对象
             _currentImageHandlerName = handlerName;
 
-            UpdateStatus(CurrentPluginStatus, _statusRight.Text);
+            UpdateStatus(CurrentPluginStatus, _statusRight?.Text);
 
-            // 初始缩放：按窗口缩小（若图片太大），否则 1.0
             _imageZoom = 1.0f;
             var panelSize = _imagePanel.ClientSize;
             if (panelSize.Width > 0 && panelSize.Height > 0 && _originalImage != null)
@@ -264,8 +273,7 @@ namespace Verviewer.UI
                 float zx = (float)panelSize.Width / _originalImage.Width;
                 float zy = (float)panelSize.Height / _originalImage.Height;
                 float fitZoom = Math.Min(zx, zy);
-                if (fitZoom < 1.0f)
-                    _imageZoom = fitZoom;
+                if (fitZoom < 1.0f) _imageZoom = fitZoom;
             }
 
             SetImageZoom(_imageZoom, fromNumeric: false);
@@ -513,28 +521,35 @@ namespace Verviewer.UI
                         {
                             try
                             {
-                                byte[] data;
-                                using (var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry))
-                                using (var ms = new MemoryStream())
-                                {
-                                    s.CopyTo(ms);
-                                    data = ms.ToArray();
-                                }
-
                                 Image? img = null;
 
-                                var imgType = PluginFactory.ResolveImageType("." + ext, data);
+                                // 先用头部挑插件（只读少量头）
+                                byte[] head;
+                                int headLen = Math.Max(16, PluginFactory.MaxImageHeaderLength);
+                                using (var sh = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry))
+                                {
+                                    head = new byte[headLen];
+                                    int r = sh.Read(head, 0, head.Length);
+                                    if (r < head.Length) Array.Resize(ref head, r);
+                                }
+
+                                var imgType = PluginFactory.ResolveImageType("." + ext, head);
                                 if (imgType != null)
                                 {
-                                    var imgHandler = (IImageHandler?)Activator.CreateInstance(imgType);
-                                    if (imgHandler != null)
-                                        img = imgHandler.TryDecode(data, "." + ext);
+                                    var obj = Activator.CreateInstance(imgType);
+
+                                    if (obj is IImageHandler ih)
+                                    {
+                                        using var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry);
+                                        img = ih.TryDecode(s, "." + ext);
+                                    }
                                 }
 
                                 if (img == null)
                                 {
-                                    using var ms2 = new MemoryStream(data);
-                                    img = Image.FromStream(ms2);
+                                    using var s = _currentArchive.Handler.OpenEntryStream(_currentArchive, entry);
+                                    var gdi = Image.FromStream(s, useEmbeddedColorManagement: true, validateImageData: true);
+                                    img = gdi; // 交给下方 ShowImage/保存时克隆与释放
                                 }
 
                                 if (img != null)

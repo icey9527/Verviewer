@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using Verviewer.Core;
 
 namespace Verviewer.Images
@@ -13,112 +14,131 @@ namespace Verviewer.Images
     {
         private static readonly byte[] MagicPattern =
         {
-            0x00, 0x00, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x10, 0x00, 0x10, 0x00
+            0x00,0x00,0x00,0x00,
+            0x01,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,
+            0x10,0x00,0x10,0x00
         };
 
-        public Image? TryDecode(byte[] data, string extension)
+        public Image? TryDecode(Stream stream, string? ext)
         {
-            if (data == null || data.Length < 0x100)
-                return null;
-
-            if (!extension.EndsWith(".fac", StringComparison.OrdinalIgnoreCase))
-                return null;
-
-            int pos = IndexOf(data, MagicPattern);
-            if (pos < 0)
-                return null;
-
+            Stream s = EnsureSeekable(stream);
             try
             {
-                return DecodeFirstLayer(data, pos);
+                if (!s.CanSeek) return null;
+
+                long pos = FindPattern(s, MagicPattern);
+                if (pos < 0) return null;
+
+                long headerStart = pos - 0x40;
+                if (headerStart < 0) return null;
+
+                ushort w = ReadUInt16At(s, headerStart + 0x38);
+                ushort h = ReadUInt16At(s, headerStart + 0x3A);
+                if (w == 0 || h == 0) return null;
+
+                long pixelCount = (long)w * h;
+                long pixelStart = pos + 16;
+                long palStart = pixelStart + pixelCount;
+
+                // 构建调色板
+                var palette = BuildPalette(s, palStart);
+                if (palette == null) return null;
+
+                // 解像素（逐行读）
+                var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+                var row = new byte[w];
+
+                s.Position = pixelStart;
+                for (int y = 0; y < h; y++)
+                {
+                    ReadExactlyInto(s, row, 0, row.Length);
+                    for (int x = 0; x < w; x++)
+                    {
+                        bmp.SetPixel(x, y, palette[row[x]]);
+                    }
+                }
+
+                return bmp;
             }
             catch
             {
                 return null;
             }
-        }
-
-        private static Image? DecodeFirstLayer(byte[] data, int patternPos)
-        {
-            int headerStart = patternPos - 0x40;
-            if (headerStart < 0 || headerStart + 0x3C > data.Length)
-                return null;
-
-            ushort w = BitConverter.ToUInt16(data, headerStart + 0x38);
-            ushort h = BitConverter.ToUInt16(data, headerStart + 0x3A);
-            if (w == 0 || h == 0)
-                return null;
-
-            long pixelCount = (long)w * h;
-            long pixelStart = patternPos + 16;
-            long palStart = pixelStart + pixelCount;
-            if (palStart + 0x400 > data.Length)
-                return null;
-
-            Color[] palette = BuildPalette(data, (int)palStart);
-
-            var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-            int pixOff = (int)pixelStart;
-
-            for (int y = 0; y < h; y++)
+            finally
             {
-                for (int x = 0; x < w; x++)
-                {
-                    if (pixOff >= palStart)
-                        return bmp;
-
-                    byte idx = data[pixOff++];
-                    bmp.SetPixel(x, y, palette[idx]);
-                }
+                if (!ReferenceEquals(s, stream)) s.Dispose();
             }
-
-            return bmp;
         }
 
-        private static Color[] BuildPalette(byte[] data, int palOffset)
+        private static Color[]? BuildPalette(Stream s, long palOffset)
         {
+            if (palOffset < 0 || palOffset + 0x400 > s.Length) return null;
+
+            s.Position = palOffset;
+            var palData = ReadExactly(s, 256 * 4);
+
             var original = new (byte R, byte G, byte B, byte A)[256];
             for (int i = 0; i < 256; i++)
             {
-                int off = palOffset + i * 4;
-                byte r = data[off];
-                byte g = data[off + 1];
-                byte b = data[off + 2];
-                byte a = FixAlpha(data[off + 3]);
+                int off = i * 4;
+                byte r = palData[off + 0];
+                byte g = palData[off + 1];
+                byte b = palData[off + 2];
+                byte a = FixAlpha(palData[off + 3]);
                 original[i] = (r, g, b, a);
             }
 
             var palette = new Color[256];
             int dst = 0;
-
             for (int major = 0; major < 256; major += 32)
             {
-                for (int i = 0; i < 8; i++)
+                for (int i = 0; i < 8; i++) { var p = original[major + i]; palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B); }
+                for (int i = 16; i < 24; i++) { var p = original[major + i]; palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B); }
+                for (int i = 8; i < 16; i++) { var p = original[major + i]; palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B); }
+                for (int i = 24; i < 32; i++) { var p = original[major + i]; palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B); }
+            }
+            return palette;
+        }
+
+        private static long FindPattern(Stream s, byte[] pattern)
+        {
+            long save = s.Position;
+            s.Position = 0;
+
+            const int chunk = 64 * 1024;
+            int pLen = pattern.Length;
+            var buffer = new byte[chunk + pLen - 1];
+            long baseOffset = 0;
+            int keep = 0;
+
+            while (true)
+            {
+                int read = s.Read(buffer, keep, chunk);
+                if (read <= 0) break;
+
+                int total = keep + read;
+                int limit = total - pLen + 1;
+                for (int i = 0; i < limit; i++)
                 {
-                    var p = original[major + i];
-                    palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B);
+                    int j = 0;
+                    for (; j < pLen; j++)
+                        if (buffer[i + j] != pattern[j]) break;
+                    if (j == pLen)
+                    {
+                        long found = baseOffset + i;
+                        s.Position = save;
+                        return found;
+                    }
                 }
-                for (int i = 16; i < 24; i++)
-                {
-                    var p = original[major + i];
-                    palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B);
-                }
-                for (int i = 8; i < 16; i++)
-                {
-                    var p = original[major + i];
-                    palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B);
-                }
-                for (int i = 24; i < 32; i++)
-                {
-                    var p = original[major + i];
-                    palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B);
-                }
+
+                keep = Math.Min(pLen - 1, total);
+                Buffer.BlockCopy(buffer, total - keep, buffer, 0, keep);
+                baseOffset += total - keep;
             }
 
-            return palette;
+            s.Position = save;
+            return -1;
         }
 
         private static byte FixAlpha(byte a)
@@ -129,27 +149,49 @@ namespace Verviewer.Images
             return (byte)v;
         }
 
-        private static int IndexOf(byte[] data, byte[] pattern)
+        private static Stream EnsureSeekable(Stream s)
         {
-            if (pattern.Length == 0 || data.Length < pattern.Length)
-                return -1;
+            if (s.CanSeek) return s;
+            var ms = new MemoryStream();
+            s.CopyTo(ms);
+            ms.Position = 0;
+            return ms;
+        }
 
-            int max = data.Length - pattern.Length;
-            for (int i = 0; i <= max; i++)
+        private static ushort ReadUInt16At(Stream s, long off)
+        {
+            long save = s.Position;
+            s.Position = off;
+            int lo = s.ReadByte(); int hi = s.ReadByte();
+            s.Position = save;
+            if (lo < 0 || hi < 0) return 0;
+            return (ushort)(lo | (hi << 8));
+        }
+
+        private static byte[] ReadExactly(Stream s, int count)
+        {
+            var buf = new byte[count];
+            int total = 0;
+            while (total < count)
             {
-                bool match = true;
-                for (int j = 0; j < pattern.Length; j++)
-                {
-                    if (data[i + j] != pattern[j])
-                    {
-                        match = false;
-                        break;
-                    }
-                }
-                if (match)
-                    return i;
+                int r = s.Read(buf, total, count - total);
+                if (r <= 0) break;
+                total += r;
             }
-            return -1;
+            if (total == count) return buf;
+            Array.Resize(ref buf, total);
+            return buf;
+        }
+
+        private static void ReadExactlyInto(Stream s, byte[] buf, int offset, int count)
+        {
+            int total = 0;
+            while (total < count)
+            {
+                int r = s.Read(buf, offset + total, count - total);
+                if (r <= 0) throw new EndOfStreamException();
+                total += r;
+            }
         }
     }
 }

@@ -1,8 +1,3 @@
-// Some parts of this implementation are based on the original C tools:
-// - IPF unpacker
-// - z0_unpack + zlib-based raw deflate decompressor
-
-
 using System.IO.Compression;
 using System.Text;
 using Verviewer.Core;

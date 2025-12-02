@@ -39,6 +39,7 @@ namespace Verviewer.UI
 
         public MainForm()
         {
+            this.Icon = new Icon("Misc/ver.ico");
             Text = "Verviewer";
             Width = 1200;
             Height = 800;
