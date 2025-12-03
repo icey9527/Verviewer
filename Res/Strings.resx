@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms</value>
+  </resheader>
+
+  <data name="MainForm.Title" xml:space="preserve">
+    <value>Verviewer</value>
+  </data>
+  <data name="Menu.Open" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="Menu.OpenFile" xml:space="preserve">
+    <value>Open File...</value>
+  </data>
+  <data name="Menu.OpenFolder" xml:space="preserve">
+    <value>Open Folder...</value>
+  </data>
+  <data name="Menu.Extract" xml:space="preserve">
+    <value>Extract...</value>
+  </data>
+  <data name="Menu.Back" xml:space="preserve">
+    <value>Back</value>
+  </data>
+</root>
