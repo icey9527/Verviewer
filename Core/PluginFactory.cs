@@ -7,25 +7,18 @@ using System.Text;
 
 internal static class PluginFactory
 {
-    private sealed class ArchiveMeta
+    private sealed class PluginMeta
     {
         public Type Type = null!;
         public string Id = "";
         public string[] Ext = Array.Empty<string>();
         public byte[][] Magic = Array.Empty<byte[]>();
-    }
-
-    private sealed class ImageMeta
-    {
-        public Type Type = null!;
-        public string Id = "";
-        public string[] Ext = Array.Empty<string>();
-        public byte[][] Magic = Array.Empty<byte[]>();
+        public bool IsWildcard => Ext.Length == 0 && Magic.Length == 0;
     }
 
     private static bool _built;
-    private static readonly List<ArchiveMeta> _archives = new();
-    private static readonly List<ImageMeta> _images = new();
+    private static readonly List<PluginMeta> _archives = new();
+    private static readonly List<PluginMeta> _images = new();
     private static int _maxArcHead;
     private static int _maxImgHead;
 
@@ -40,25 +33,29 @@ internal static class PluginFactory
 
     private static void Build(IEnumerable<Assembly> assemblies)
     {
-        _archives.Clear(); _images.Clear();
-        _maxArcHead = 0; _maxImgHead = 0;
+        _archives.Clear();
+        _images.Clear();
+        _maxArcHead = 0;
+        _maxImgHead = 0;
 
         foreach (var asm in assemblies)
         {
-            Type[] types; try { types = asm.GetTypes(); } catch { continue; }
+            Type[] types;
+            try { types = asm.GetTypes(); }
+            catch { continue; }
+
             foreach (var t in types)
             {
                 var ap = t.GetCustomAttribute<ArchivePluginAttribute>();
                 if (ap != null)
                 {
-                    var m = new ArchiveMeta
+                    var m = new PluginMeta
                     {
                         Type = t,
                         Id = ap.Id,
-                        Ext = (ap.Extensions ?? Array.Empty<string>()).Select(NormExt).ToArray(),
+                        Ext = (ap.Extensions ?? Array.Empty<string>()).Select(NormExt).Where(x => x.Length > 0).ToArray(),
                         Magic = ParseMany(ap.Magics)
                     };
-                    if (m.Ext.Length == 0 && m.Magic.Length == 0) continue;
                     _archives.Add(m);
                     if (m.Magic.Length > 0) _maxArcHead = Math.Max(_maxArcHead, m.Magic.Max(x => x.Length));
                 }
@@ -66,14 +63,13 @@ internal static class PluginFactory
                 var ip = t.GetCustomAttribute<ImagePluginAttribute>();
                 if (ip != null)
                 {
-                    var m = new ImageMeta
+                    var m = new PluginMeta
                     {
                         Type = t,
                         Id = ip.Id,
-                        Ext = (ip.Extensions ?? Array.Empty<string>()).Select(NormExt).ToArray(),
+                        Ext = (ip.Extensions ?? Array.Empty<string>()).Select(NormExt).Where(x => x.Length > 0).ToArray(),
                         Magic = ParseMany(ip.Magics)
                     };
-                    if (m.Ext.Length == 0 && m.Magic.Length == 0) continue;
                     _images.Add(m);
                     if (m.Magic.Length > 0) _maxImgHead = Math.Max(_maxImgHead, m.Magic.Max(x => x.Length));
                 }
@@ -159,71 +155,72 @@ internal static class PluginFactory
         }
     }
 
-    /// <summary>
-    /// 封包插件：按权重（Magic 2 分 + Ext 1 分）和匹配长度/Id 排序，返回全部候选插件类型。
-    /// </summary>
+    private static IReadOnlyList<Type> ResolveTypes(List<PluginMeta> plugins, string ext, ReadOnlySpan<byte> head)
+    {
+        if (plugins.Count == 0) return Array.Empty<Type>();
+
+        var list = new List<(PluginMeta p, int score, int magicLen)>();
+        bool hasStrongMatch = false;
+
+        foreach (var p in plugins)
+        {
+            bool hasExt = p.Ext.Length > 0;
+            bool hasMagic = p.Magic.Length > 0;
+            bool isWildcard = p.IsWildcard;
+
+            bool extHit = hasExt && ext.Length > 0 && p.Ext.Contains(ext);
+            int len = 0;
+            bool magicHit = hasMagic && StartsWithAny(head, p.Magic, out len);
+
+            int score;
+            int magicLen;
+
+            if (extHit || magicHit)
+            {
+                score = (extHit ? 1 : 0) + (magicHit ? 2 : 0);
+                magicLen = len;
+                if (score > 0) hasStrongMatch = true;
+            }
+            else if (isWildcard)
+            {
+                score = 0;
+                magicLen = 0;
+            }
+            else
+            {
+                continue;
+            }
+
+            list.Add((p, score, magicLen));
+        }
+
+        if (list.Count == 0) return Array.Empty<Type>();
+
+        if (hasStrongMatch)
+            list.RemoveAll(x => x.score == 0);
+
+        return list
+            .OrderByDescending(x => x.score)
+            .ThenByDescending(x => x.magicLen)
+            .ThenBy(x => x.p.Id, StringComparer.Ordinal)
+            .Select(x => x.p.Type)
+            .ToArray();
+    }
+
     public static IReadOnlyList<Type> ResolveArchiveTypes(string path, Stream s)
     {
         EnsureBuilt();
         var ext = GetExt(path);
-        var head = ReadHeader(s, _maxArcHead);
-
-        var list = new List<(ArchiveMeta p, int score, int magicLen)>();
-        foreach (var p in _archives)
-        {
-            bool extHit = ext.Length > 0 &&
-                          p.Ext.Contains(ext, StringComparer.OrdinalIgnoreCase);
-
-            int len = 0;
-            bool magicHit = p.Magic.Length > 0 &&
-                            StartsWithAny(head, p.Magic, out len);
-
-            if (!(extHit || magicHit))
-                continue;
-
-            int score = (extHit ? 1 : 0) + (magicHit ? 2 : 0);
-            list.Add((p, score, len));
-        }
-
-        return list
-            .OrderByDescending(x => x.score)
-            .ThenByDescending(x => x.magicLen)
-            .ThenBy(x => x.p.Id, StringComparer.Ordinal)
-            .Select(x => x.p.Type)
-            .ToList();
+        var head = _maxArcHead > 0 ? ReadHeader(s, _maxArcHead) : Array.Empty<byte>();
+        return ResolveTypes(_archives, ext, head);
     }
 
-    /// <summary>
-    /// 图片插件：按权重（Magic 2 分 + Ext 1 分）和匹配长度/Id 排序，返回全部候选插件类型。
-    /// </summary>
     public static IReadOnlyList<Type> ResolveImageTypes(string? nameOrExt, ReadOnlySpan<byte> data)
     {
         EnsureBuilt();
         var ext = GetExt(nameOrExt);
-        var head = data.Slice(0, Math.Min(_maxImgHead, data.Length)).ToArray();
-
-        var list = new List<(ImageMeta p, int score, int magicLen)>();
-        foreach (var p in _images)
-        {
-            bool extHit = ext.Length > 0 &&
-                          p.Ext.Contains(ext, StringComparer.OrdinalIgnoreCase);
-
-            int len = 0;
-            bool magicHit = p.Magic.Length > 0 &&
-                            StartsWithAny(head, p.Magic, out len);
-
-            if (!(extHit || magicHit))
-                continue;
-
-            int score = (extHit ? 1 : 0) + (magicHit ? 2 : 0);
-            list.Add((p, score, len));
-        }
-
-        return list
-            .OrderByDescending(x => x.score)
-            .ThenByDescending(x => x.magicLen)
-            .ThenBy(x => x.p.Id, StringComparer.Ordinal)
-            .Select(x => x.p.Type)
-            .ToList();
+        var headLen = Math.Min(_maxImgHead, data.Length);
+        var head = data.Slice(0, headLen);
+        return ResolveTypes(_images, ext, head);
     }
 }

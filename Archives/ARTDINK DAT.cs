@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using Verviewer.Core;
 
@@ -7,34 +10,38 @@ namespace Verviewer.Archives
     {
         public static bool TryDecompress(byte[] data, out byte[] output)
         {
+            if (data == null)
+            {
+                output = Array.Empty<byte>();
+                return false;
+            }
+            using var ms = new MemoryStream(data, false);
+            return TryDecompress(ms, data.Length, out output);
+        }
+
+        public static bool TryDecompress(Stream input, int compressedSize, out byte[] output)
+        {
             output = Array.Empty<byte>();
-            if (data == null || data.Length < 8)
-                return false;
-
-            uint expectedSizeRaw = BitConverter.ToUInt32(data, 4);
-            if (expectedSizeRaw == 0 || expectedSizeRaw > int.MaxValue)
-                return false;
-
+            if (input == null || !input.CanRead || compressedSize < 8) return false;
+            var header = new byte[8];
+            if (!ReadExact(input, header, 0, 8)) return false;
+            uint expectedSizeRaw = BitConverter.ToUInt32(header, 4);
+            if (expectedSizeRaw == 0 || expectedSizeRaw > int.MaxValue) return false;
             int expectedSize = (int)expectedSizeRaw;
-            int dataSize = data.Length;
-
-            int readIndex = 8;
-            int outIndex = 0;
+            int remaining = compressedSize - 8;
+            var dict = new byte[0x1000];
             uint dictPos = 0xFEE;
             uint control = 0;
-            byte[] dict = new byte[0x1000];
-            byte[] buffer = new byte[expectedSize];
-
-            bool isMode1 = dataSize > 3 &&
-                           data[1] == (byte)'3' &&
-                           data[2] == (byte)';' &&
-                           data[3] == (byte)'1';
-
-            bool isMode0 = dataSize > 3 &&
-                           data[1] == (byte)'3' &&
-                           data[2] == (byte)';' &&
-                           data[3] == (byte)'0';
-
+            int outIndex = 0;
+            var buffer = new byte[expectedSize];
+            bool isMode1 = compressedSize > 3 &&
+                           header[1] == (byte)'3' &&
+                           header[2] == (byte)';' &&
+                           header[3] == (byte)'1';
+            bool isMode0 = compressedSize > 3 &&
+                           header[1] == (byte)'3' &&
+                           header[2] == (byte)';' &&
+                           header[3] == (byte)'0';
             if (isMode1)
             {
                 bool stop = false;
@@ -44,74 +51,64 @@ namespace Verviewer.Archives
                     {
                         control >>= 1;
                         uint temp = control;
-
                         if ((control & 0x100) == 0)
                         {
-                            if (dataSize <= readIndex)
+                            if (remaining <= 0)
                             {
                                 stop = true;
                                 break;
                             }
-
-                            byte pb = data[readIndex++];
+                            int pb = input.ReadByte();
+                            if (pb < 0)
+                            {
+                                stop = true;
+                                break;
+                            }
+                            remaining--;
                             byte x = (byte)(pb ^ 0x72);
                             control = (uint)(x | 0xFF00);
                             temp = x;
                         }
-
-                        if ((temp & 1) != 0)
-                            break;
-
-                        if (dataSize <= readIndex + 1)
+                        if ((temp & 1) != 0) break;
+                        if (remaining <= 1)
                         {
                             stop = true;
                             break;
                         }
-
-                        int nextIndex = readIndex + 1;
-                        byte b1 = data[readIndex];
-                        readIndex += 2;
-                        byte b2 = data[nextIndex];
-
+                        int b1 = input.ReadByte();
+                        int b2 = input.ReadByte();
+                        if (b1 < 0 || b2 < 0)
+                        {
+                            stop = true;
+                            break;
+                        }
+                        remaining -= 2;
                         int cnt = 0;
                         int len = ((b2 ^ 0x72) & 0x0F) + 2;
-
                         while (cnt <= len)
                         {
-                            uint offset = (uint)((b1 ^ 0x72) |
-                                                 (((b2 ^ 0x72) & 0xF0) << 4));
+                            uint offset = (uint)((b1 ^ 0x72) | (((b2 ^ 0x72) & 0xF0) << 4));
                             offset += (uint)cnt;
                             cnt++;
-
                             byte value = dict[offset & 0x0FFF];
-
                             if (outIndex >= expectedSize)
                             {
                                 stop = true;
                                 break;
                             }
-
                             buffer[outIndex++] = value;
                             dict[dictPos] = value;
                             dictPos = (dictPos + 1) & 0x0FFF;
                         }
-
-                        if (stop)
-                            break;
+                        if (stop) break;
                     }
-
-                    if (stop)
-                        break;
-
-                    if (dataSize <= readIndex)
-                        break;
-
-                    byte b = data[readIndex++];
+                    if (stop) break;
+                    if (remaining <= 0) break;
+                    int b = input.ReadByte();
+                    if (b < 0) break;
+                    remaining--;
                     byte value2 = (byte)(b ^ 0x72);
-
-                    if (outIndex >= expectedSize)
-                        break;
-
+                    if (outIndex >= expectedSize) break;
                     buffer[outIndex++] = value2;
                     dict[dictPos] = value2;
                     dictPos = (dictPos + 1) & 0x0FFF;
@@ -119,28 +116,34 @@ namespace Verviewer.Archives
             }
             else if (isMode0)
             {
-                if (dataSize > 8)
+                while (remaining > 0 && outIndex < expectedSize)
                 {
-                    for (int i = 8; i < dataSize; i++)
-                    {
-                        byte value = (byte)(data[i] ^ 0x72);
-                        if (outIndex >= expectedSize)
-                            break;
-
-                        buffer[outIndex++] = value;
-                    }
+                    int b = input.ReadByte();
+                    if (b < 0) break;
+                    remaining--;
+                    buffer[outIndex++] = (byte)(b ^ 0x72);
                 }
             }
             else
             {
                 return false;
             }
-
             if (outIndex < 0) outIndex = 0;
             if (outIndex > expectedSize) outIndex = expectedSize;
-
             output = new byte[outIndex];
-            Array.Copy(buffer, output, outIndex);
+            Buffer.BlockCopy(buffer, 0, output, 0, outIndex);
+            return true;
+        }
+
+        static bool ReadExact(Stream s, byte[] buffer, int offset, int count)
+        {
+            while (count > 0)
+            {
+                int n = s.Read(buffer, offset, count);
+                if (n <= 0) return false;
+                offset += n;
+                count -= n;
+            }
             return true;
         }
     }
@@ -149,104 +152,69 @@ namespace Verviewer.Archives
         id: "Artdink DAT",
         extensions: new[] { "dat" },
         magics: new[] { "PIDX0" }
-        )]
+    )]
     internal class Artdink_DAT : IArchiveHandler
-{
-
+    {
         public OpenedArchive Open(string archivePath)
         {
             var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             var br = new BinaryReader(fs, Encoding.ASCII, leaveOpen: true);
-
-            // 2. 检查 0x8 == 1
             fs.Position = 0x8;
             uint flag = br.ReadUInt32();
             if (flag != 1)
             {
                 br.Dispose();
                 fs.Dispose();
-                throw new InvalidDataException("又调皮了哈？可不兴对idx用这个啊");
+                throw new InvalidDataException();
             }
-
-            // 3. 公用头信息（不管是否有 FSTS 嵌套）
             fs.Position = 0xC;
-            uint start = br.ReadUInt32();       // 对应 C 里的 start
-            uint indexCount = br.ReadUInt32();  // 旧格式用
-
+            uint start = br.ReadUInt32();
+            uint indexCount = br.ReadUInt32();
             fs.Position = 0x20;
             uint nameStart = br.ReadUInt32();
-
-            // 尝试读取 FSTS 子索引个数（0x50 处），读不到就当没有
             uint subIndexCount = 0;
             if (fs.Length >= 0x54)
             {
                 fs.Position = 0x50;
                 subIndexCount = br.ReadUInt32();
             }
-
             List<ArchiveEntry> entries;
-
             if (subIndexCount > 0)
             {
-                // 新格式：DAT 里嵌套若干 FSTS 子包
                 entries = ParseNestedFsts(fs, br, start, nameStart, subIndexCount);
-
-                // 如果解析结果是空表，可以当作失败，退回旧格式逻辑
                 if (entries.Count == 0)
-                {
                     entries = ParseFlatDatIndex(fs, br, start, indexCount, nameStart);
-                }
             }
             else
             {
-                // 旧格式：传统 DAT 索引（type/name_offset/...）
                 entries = ParseFlatDatIndex(fs, br, start, indexCount, nameStart);
             }
-
             br.Dispose();
-
             return new OpenedArchive(archivePath, fs, entries, this);
         }
 
         public Stream OpenEntryStream(OpenedArchive archive, ArchiveEntry entry)
         {
-            if (entry.IsDirectory)
-                throw new InvalidOperationException("目录没有数据流。");
-
+            if (entry.IsDirectory) throw new InvalidOperationException();
             var fs = archive.Stream;
-
-            fs.Position = entry.Offset;
-            byte[] compData = new byte[entry.Size];
-            int read = fs.Read(compData, 0, compData.Length);
-            if (read < compData.Length)
-                Array.Resize(ref compData, read);
-
-            if (ArtdinkCompression.TryDecompress(compData, out var dec))
-            {
-                return new MemoryStream(dec, writable: false);
-            }
-            else
+            if (entry.Size > 0)
             {
                 fs.Position = entry.Offset;
-                byte[] raw = new byte[entry.UncompressedSize];
-                read = fs.Read(raw, 0, raw.Length);
-                if (read < raw.Length)
-                    Array.Resize(ref raw, read);
-                return new MemoryStream(raw, writable: false);
+                if (ArtdinkCompression.TryDecompress(fs, entry.Size, out var dec))
+                    return new MemoryStream(dec, false);
             }
+            int rawSize = entry.UncompressedSize > 0 ? entry.UncompressedSize : entry.Size;
+            if (rawSize <= 0) return Stream.Null;
+            var raw = new byte[rawSize];
+            fs.Position = entry.Offset;
+            int read = fs.Read(raw, 0, raw.Length);
+            if (read < raw.Length) Array.Resize(ref raw, read);
+            return new MemoryStream(raw, false);
         }
 
-        #region 旧格式 DAT 索引解析（type/name_offset/sign/offset/...）
-
-        private List<ArchiveEntry> ParseFlatDatIndex(
-            FileStream fs,
-            BinaryReader br,
-            uint indexStart,
-            uint indexCount,
-            uint nameStart)
+        List<ArchiveEntry> ParseFlatDatIndex(FileStream fs, BinaryReader br, uint indexStart, uint indexCount, uint nameStart)
         {
             var datEntries = new List<DatEntry>();
-
             fs.Position = indexStart;
             for (int i = 0; i < indexCount; i++)
             {
@@ -262,20 +230,16 @@ namespace Verviewer.Archives
                 };
                 datEntries.Add(e);
             }
-
-            // 文件名
             foreach (var e in datEntries)
             {
                 fs.Position = nameStart + e.NameOffset;
                 e.FileName = ReadNullTerminatedString(br);
             }
-
             var entries = new List<ArchiveEntry>(datEntries.Count);
             foreach (var e in datEntries)
             {
                 bool isDir = e.Type == 1;
                 string path = e.FileName.Replace('\\', '/');
-
                 entries.Add(new ArchiveEntry
                 {
                     Path = path,
@@ -285,27 +249,13 @@ namespace Verviewer.Archives
                     UncompressedSize = (int)e.UncompressedSize
                 });
             }
-
             return entries;
         }
 
-        #endregion
-
-        #region 嵌套 FSTS 解析（process_pidx0 + process_fsts）
-
-        private List<ArchiveEntry> ParseNestedFsts(
-            FileStream fs,
-            BinaryReader br,
-            uint start,
-            uint nameStart,
-            uint subIndexCount)
+        List<ArchiveEntry> ParseNestedFsts(FileStream fs, BinaryReader br, uint start, uint nameStart, uint subIndexCount)
         {
             var result = new List<ArchiveEntry>();
-
-            // sub_index_start = start + 4;
             long subIndexStart = start + 4;
-
-            // 读取所有 sub_index_pointers
             uint[] subPtrs = new uint[subIndexCount];
             for (uint i = 0; i < subIndexCount; i++)
             {
@@ -313,44 +263,28 @@ namespace Verviewer.Archives
                 uint pointer = br.ReadUInt32();
                 subPtrs[i] = pointer + start;
             }
-
-            // 对每个二级索引，读取名字和 FSTS 区块位置，然后解析 FSTS
             for (uint i = 0; i < subIndexCount; i++)
             {
                 fs.Position = subPtrs[i];
-
                 uint nameOffset = br.ReadUInt32();
-                uint placeholder = br.ReadUInt32();      // 未用
+                uint placeholder = br.ReadUInt32();
                 uint fstOffset = br.ReadUInt32();
                 uint fstSize = br.ReadUInt32();
-                uint num = br.ReadUInt32();              // 未用
-
+                uint num = br.ReadUInt32();
                 string name = ReadNullTerminatedStringAt(fs, nameStart + nameOffset);
                 string prefix = name.Replace('\\', '/').Trim('/');
-
-                // 解析嵌套 FSTS（prefix 作为子目录）
                 ParseFstsAt(fs, fstOffset, fstSize, prefix, result);
             }
-
             return result;
         }
 
-        private void ParseFstsAt(
-            FileStream fs,
-            uint fstOffset,
-            uint fstSize,
-            string prefix,
-            List<ArchiveEntry> output)
+        void ParseFstsAt(FileStream fs, uint fstOffset, uint fstSize, string prefix, List<ArchiveEntry> output)
         {
             long baseOffset = fstOffset;
-            if (baseOffset + 4 > fs.Length)
-                return;
-
+            if (baseOffset + 4 > fs.Length) return;
             long saved = fs.Position;
             fs.Position = baseOffset;
-            using var br = new BinaryReader(fs, Encoding.ASCII, leaveOpen: true);
-
-            // FSTS 头
+            using var br = new BinaryReader(fs, Encoding.ASCII, true);
             byte[] magicBytes = br.ReadBytes(4);
             string magic = Encoding.ASCII.GetString(magicBytes);
             if (magic != "FSTS")
@@ -358,12 +292,9 @@ namespace Verviewer.Archives
                 fs.Position = saved;
                 return;
             }
-
             uint idxq = br.ReadUInt32();
             uint indexStart = br.ReadUInt32();
             uint nameStart = br.ReadUInt32();
-
-            // 读取 FSTS 内部索引表
             fs.Position = baseOffset + indexStart;
             for (uint i = 0; i < idxq; i++)
             {
@@ -371,17 +302,10 @@ namespace Verviewer.Archives
                 uint offset = br.ReadUInt32();
                 uint size = br.ReadUInt32();
                 uint uncompressSize = br.ReadUInt32();
-
                 string name = ReadNullTerminatedStringAt(fs, baseOffset + nameStart + nameOffset);
                 string innerPath = name.Replace('\\', '/').Trim('/');
-
-                string fullPath = string.IsNullOrEmpty(prefix)
-                    ? innerPath
-                    : $"{prefix}/{innerPath}";
-
-                // FSTS 内部 offset 是相对于 FSTS 开头的，这里转换成相对于整个 DAT 的全局偏移
+                string fullPath = string.IsNullOrEmpty(prefix) ? innerPath : $"{prefix}/{innerPath}";
                 long globalOffset = baseOffset + offset;
-
                 output.Add(new ArchiveEntry
                 {
                     Path = fullPath,
@@ -391,15 +315,10 @@ namespace Verviewer.Archives
                     UncompressedSize = (int)uncompressSize
                 });
             }
-
             fs.Position = saved;
         }
 
-        #endregion
-
-        #region 辅助方法
-
-        private static string ReadNullTerminatedString(BinaryReader br)
+        static string ReadNullTerminatedString(BinaryReader br)
         {
             var bytes = new List<byte>();
             while (true)
@@ -411,25 +330,22 @@ namespace Verviewer.Archives
             return Encoding.GetEncoding(932).GetString(bytes.ToArray());
         }
 
-        private static string ReadNullTerminatedStringAt(FileStream fs, long offset)
+        static string ReadNullTerminatedStringAt(FileStream fs, long offset)
         {
             long current = fs.Position;
             fs.Position = offset;
-
             var bytes = new List<byte>();
             while (true)
             {
                 int b = fs.ReadByte();
-                if (b == -1 || b == 0)
-                    break;
+                if (b == -1 || b == 0) break;
                 bytes.Add((byte)b);
             }
-
             fs.Position = current;
             return Encoding.GetEncoding(932).GetString(bytes.ToArray());
         }
 
-        private class DatEntry
+        class DatEntry
         {
             public int Index { get; set; }
             public uint Type { get; set; }
@@ -440,7 +356,5 @@ namespace Verviewer.Archives
             public uint Size { get; set; }
             public string FileName { get; set; } = string.Empty;
         }
-
-        #endregion
     }
 }

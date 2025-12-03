@@ -37,45 +37,41 @@ namespace Verviewer.Images
             try
             {
                 if (!s.CanSeek || s.Length < 32) return null;
-
                 if (!ReadHeader(s, out var h)) return null;
                 if (h.W <= 0 || h.H <= 0 || h.Parts < 0) return null;
                 long pixels = (long)h.W * h.H;
                 if (pixels <= 0 || pixels > 10000L * 10000L) return null;
-
-                int stride = checked(h.W * 4);
-                var full = new byte[checked(stride * h.H)];
-
-                if (!FillImage(s, h, full, stride)) return null;
-
                 var bmp = new Bitmap(h.W, h.H, PixelFormat.Format32bppArgb);
                 var rect = new Rectangle(0, 0, h.W, h.H);
-                var bd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                BitmapData bd;
                 try
                 {
-                    if (bd.Stride == stride)
-                    {
-                        Marshal.Copy(full, 0, bd.Scan0, full.Length);
-                    }
-                    else
-                    {
-                        for (int y = 0; y < h.H; y++)
-                        {
-                            IntPtr dst = bd.Scan0 + y * bd.Stride;
-                            Marshal.Copy(full, y * stride, dst, stride);
-                        }
-                    }
+                    bd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                }
+                catch
+                {
+                    bmp.Dispose();
+                    return null;
+                }
+                bool ok;
+                try
+                {
+                    ok = FillImage(s, h, bd);
+                }
+                catch
+                {
+                    ok = false;
                 }
                 finally
                 {
                     bmp.UnlockBits(bd);
                 }
-
+                if (!ok)
+                {
+                    bmp.Dispose();
+                    return null;
+                }
                 return bmp;
-            }
-            catch
-            {
-                return null;
             }
             finally
             {
@@ -89,104 +85,107 @@ namespace Verviewer.Images
             int raw = ReadInt32At(s, 0);
             int magic;
             bool old;
-
             switch (raw)
             {
                 case MagicT1:
                 case MagicT4:
                 case MagicT8:
-                    magic = raw; old = false; break;
+                    magic = raw;
+                    old = false;
+                    break;
                 case OldT8:
-                    magic = MagicT8; old = true; break;
+                    magic = MagicT8;
+                    old = true;
+                    break;
                 case OldT4:
-                    magic = MagicT4; old = true; break;
+                    magic = MagicT4;
+                    old = true;
+                    break;
                 case OldT1:
-                    magic = MagicT1; old = true; break;
+                    magic = MagicT1;
+                    old = true;
+                    break;
                 default:
                     return false;
             }
-
             int baseOffset = old ? 32 : 36;
             int w = ReadInt32At(s, 20);
             int hh = ReadInt32At(s, 24);
             int parts = ReadInt32At(s, 28);
-
             h = new T32Header { Magic = magic, W = w, H = hh, Parts = parts, OffsetBase = baseOffset };
             return true;
         }
 
-        static bool FillImage(Stream s, T32Header h, byte[] full, int fullStride)
+        static bool FillImage(Stream s, T32Header h, BitmapData bd)
         {
-            int width = h.W, height = h.H;
-
+            int width = h.W;
+            int height = h.H;
+            int stride = bd.Stride;
+            IntPtr basePtr = bd.Scan0;
             int tableBytes;
             try { tableBytes = checked(h.Parts * 4); } catch { return false; }
             if (h.OffsetBase < 0 || h.OffsetBase + tableBytes > s.Length) return false;
-
             for (int i = 0; i < h.Parts; i++)
             {
                 int ofsPos = h.OffsetBase + i * 4;
                 int ofs = ReadInt32At(s, ofsPos);
                 if (ofs < 0 || ofs + 16 > s.Length) return false;
-
                 int px = ReadInt32At(s, ofs + 0);
                 int py = ReadInt32At(s, ofs + 4);
                 int pw = ReadInt32At(s, ofs + 8);
                 int ph = ReadInt32At(s, ofs + 12);
-
                 if (pw <= 0 || ph <= 0) continue;
                 if (px < 0 || py < 0) return false;
                 if (px >= width || py >= height) continue;
-
-                int cw = pw, ch = ph;
+                int cw = pw;
+                int ch = ph;
                 if (px + cw > width) cw = width - px;
                 if (py + ch > height) ch = height - py;
                 if (cw <= 0 || ch <= 0) continue;
-
-                int bpp = (h.Magic == MagicT8) ? 4 : 2;
+                int bpp = h.Magic == MagicT8 ? 4 : 2;
                 int pitch = Align4(checked(pw * bpp));
-
                 long start = (long)ofs + 16;
                 long total = (long)pitch * ph;
                 if (start < 0 || start + total > s.Length) return false;
-
                 s.Position = start;
-
                 if (h.Magic == MagicT8)
                 {
                     var rowBuf = new byte[pitch];
                     for (int row = 0; row < ch; row++)
                     {
                         ReadExactlyInto(s, rowBuf, 0, pitch);
-                        int dst = (py + row) * fullStride + px * 4;
-                        Buffer.BlockCopy(rowBuf, 0, full, dst, cw * 4);
+                        IntPtr dest = IntPtr.Add(basePtr, (py + row) * stride + px * 4);
+                        Marshal.Copy(rowBuf, 0, dest, cw * 4);
                     }
                 }
                 else
                 {
                     bool is1555 = h.Magic == MagicT1;
                     var rowBuf = new byte[pitch];
+                    var rowOut = new byte[cw * 4];
                     for (int row = 0; row < ch; row++)
                     {
                         ReadExactlyInto(s, rowBuf, 0, pitch);
+                        int src = 0;
+                        int dst = 0;
                         for (int col = 0; col < cw; col++)
                         {
-                            int si = col * 2;
-                            ushort v = (ushort)(rowBuf[si] | (rowBuf[si + 1] << 8));
+                            ushort v = (ushort)(rowBuf[src] | (rowBuf[src + 1] << 8));
+                            src += 2;
                             byte a, r, g, b;
                             if (is1555) From1555(v, out a, out r, out g, out b);
                             else From4444(v, out a, out r, out g, out b);
-
-                            int di = (py + row) * fullStride + (px + col) * 4;
-                            full[di + 0] = b;
-                            full[di + 1] = g;
-                            full[di + 2] = r;
-                            full[di + 3] = a;
+                            rowOut[dst + 0] = b;
+                            rowOut[dst + 1] = g;
+                            rowOut[dst + 2] = r;
+                            rowOut[dst + 3] = a;
+                            dst += 4;
                         }
+                        IntPtr dest = IntPtr.Add(basePtr, (py + row) * stride + px * 4);
+                        Marshal.Copy(rowOut, 0, dest, rowOut.Length);
                     }
                 }
             }
-
             return true;
         }
 
@@ -219,7 +218,10 @@ namespace Verviewer.Images
         {
             long save = s.Position;
             s.Position = off;
-            int b0 = s.ReadByte(), b1 = s.ReadByte(), b2 = s.ReadByte(), b3 = s.ReadByte();
+            int b0 = s.ReadByte();
+            int b1 = s.ReadByte();
+            int b2 = s.ReadByte();
+            int b3 = s.ReadByte();
             s.Position = save;
             if ((b0 | b1 | b2 | b3) < 0) return 0;
             return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);

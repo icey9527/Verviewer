@@ -5,6 +5,7 @@ GPT5模仿 garbro写的玩意儿，将支持一些我感兴趣的格式。（温
 | ギャラクシーエンジェル（含体验版） | PC / PS2 / XBOX | PAK / DAT | T32 / TBM / TEX / TXF / AGI / FAC |
 | ギャラクシーエンジェル EX / プリンセスコンチェルト | PC | DAT |
 | 楽園 / 僕の心は雨のち晴れ | PC / PSP | IPD / PFS | IPG |  
+| ヤミと帽子と本の旅人 / コゲとリリスのナハトムジーク | PC | PAK | GRP |  
 
 * [封包插件开发](docs/ArchivePlugin-Guide.md)
 * [图片插件开发](docs/ImagePlugin-Guide.md) 

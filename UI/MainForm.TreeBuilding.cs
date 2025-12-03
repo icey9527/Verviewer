@@ -21,7 +21,6 @@ namespace Verviewer.UI
                 return;
             }
 
-            // 根节点名字：文件名或文件夹名
             var srcPath = _currentArchive.SourcePath?
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) ?? string.Empty;
 
@@ -31,99 +30,108 @@ namespace Verviewer.UI
 
             var rootNode = new TreeNode(rootName)
             {
-                Tag = string.Empty // 根路径用空字符串
+                Tag = string.Empty
             };
             _tree.Nodes.Add(rootNode);
 
             UpdateStatus(CurrentPluginStatus, "正在构建目录树…");
 
+            var dirNodes = new System.Collections.Generic.Dictionary<string, TreeNode>(StringComparer.OrdinalIgnoreCase)
+            {
+                [""] = rootNode
+            };
+
             foreach (var entry in _currentArchive.Entries)
             {
-                AddEntryToTree(rootNode, entry);
+                var normPath = NormalizePath(entry.Path);
+                if (string.IsNullOrEmpty(normPath))
+                    continue;
+
+                if (entry.IsDirectory)
+                {
+                    EnsureDirectoryNode(normPath, dirNodes, rootNode);
+                    continue;
+                }
+
+                int lastSlash = normPath.LastIndexOf('/');
+                string dirPath, name;
+                if (lastSlash >= 0)
+                {
+                    dirPath = normPath.Substring(0, lastSlash);
+                    name = normPath.Substring(lastSlash + 1);
+                }
+                else
+                {
+                    dirPath = string.Empty;
+                    name = normPath;
+                }
+
+                var parent = EnsureDirectoryNode(dirPath, dirNodes, rootNode);
+                var node = new TreeNode(name)
+                {
+                    Tag = entry
+                };
+                parent.Nodes.Add(node);
             }
 
-            // 构建完以后统一排序
             SortTreeNode(rootNode);
-
             rootNode.Expand();
             _tree.EndUpdate();
 
             UpdateStatus(CurrentPluginStatus, string.Empty);
         }
 
-        private void AddEntryToTree(TreeNode rootNode, ArchiveEntry entry)
+        private static string NormalizePath(string path)
         {
-            if (string.IsNullOrEmpty(entry.Path))
-                return;
+            if (string.IsNullOrEmpty(path))
+                return string.Empty;
 
-            // 统一分隔符并清理掉开头的 "./"、"." 之类
-            string fullPath = entry.Path.Replace('\\', '/').Trim();
+            string p = path.Replace('\\', '/').Trim();
+            if (p == "." || p == "./")
+                return string.Empty;
+            if (p.StartsWith("./", StringComparison.Ordinal))
+                p = p.Substring(2);
+            p = p.Trim('/');
+            if (p.Length == 0)
+                return string.Empty;
+            var parts = p.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                         .Where(x => x != ".")
+                         .ToArray();
+            return parts.Length == 0 ? string.Empty : string.Join("/", parts);
+        }
 
-            // 完全就是 "." 的，直接忽略
-            if (fullPath == "." || fullPath == "./")
-                return;
+        private static TreeNode EnsureDirectoryNode(string dirPath,
+            System.Collections.Generic.Dictionary<string, TreeNode> map,
+            TreeNode rootNode)
+        {
+            if (map.TryGetValue(dirPath, out var node))
+                return node;
 
-            // 去掉前导 "./"
-            if (fullPath.StartsWith("./", StringComparison.Ordinal))
-                fullPath = fullPath.Substring(2);
+            if (string.IsNullOrEmpty(dirPath))
+                return rootNode;
 
-            fullPath = fullPath.Trim('/');
-            if (string.IsNullOrEmpty(fullPath))
-                return;
-
-            // 拆分路径，过滤掉中间出现的 "."
-            string[] parts = fullPath
-                .Split('/', StringSplitOptions.RemoveEmptyEntries)
-                .Where(p => p != ".")
-                .ToArray();
-
-            if (parts.Length == 0)
-                return;
-
-            TreeNode node = rootNode;
-            string currentPath = string.Empty;
-
-            for (int i = 0; i < parts.Length; i++)
+            int lastSlash = dirPath.LastIndexOf('/');
+            string parentPath;
+            string name;
+            if (lastSlash >= 0)
             {
-                string part = parts[i];
-                bool isLast = (i == parts.Length - 1);
-                currentPath = string.IsNullOrEmpty(currentPath) ? part : (currentPath + "/" + part);
-
-                TreeNode? child = null;
-                foreach (TreeNode c in node.Nodes)
-                {
-                    if (isLast && c.Tag is ArchiveEntry ae &&
-                        ae.Path.Equals(currentPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        child = c;
-                        break;
-                    }
-                    if (!isLast && c.Tag is string s &&
-                        s.Equals(currentPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        child = c;
-                        break;
-                    }
-                }
-
-                if (child == null)
-                {
-                    child = new TreeNode(part);
-                    if (isLast && !entry.IsDirectory)
-                    {
-                        // 文件节点：Tag = ArchiveEntry
-                        child.Tag = entry;
-                    }
-                    else
-                    {
-                        // 目录节点：Tag = 该目录的虚拟路径
-                        child.Tag = currentPath;
-                    }
-                    node.Nodes.Add(child);
-                }
-
-                node = child;
+                parentPath = dirPath.Substring(0, lastSlash);
+                name = dirPath.Substring(lastSlash + 1);
             }
+            else
+            {
+                parentPath = string.Empty;
+                name = dirPath;
+            }
+
+            var parent = EnsureDirectoryNode(parentPath, map, rootNode);
+            node = new TreeNode(name)
+            {
+                Tag = dirPath
+            };
+            parent.Nodes.Add(node);
+            map[dirPath] = node;
+            return node;
         }
 
         /// <summary>
@@ -151,11 +159,9 @@ namespace Verviewer.UI
             bool aIsDir = a.Tag is string;
             bool bIsDir = b.Tag is string;
 
-            // 目录在前，文件在后
             if (aIsDir && !bIsDir) return -1;
             if (!aIsDir && bIsDir) return 1;
 
-            // 两个都是文件
             if (a.Tag is ArchiveEntry ae && b.Tag is ArchiveEntry be)
             {
                 string extA = Path.GetExtension(ae.Path);
@@ -163,13 +169,11 @@ namespace Verviewer.UI
                 int cmpExt = string.Compare(extA, extB, StringComparison.OrdinalIgnoreCase);
                 if (cmpExt != 0) return cmpExt;
 
-                // 如果将来 ArchiveEntry 有 Size，可以在这里加入按大小排序
                 return string.Compare(Path.GetFileName(ae.Path),
                                       Path.GetFileName(be.Path),
                                       StringComparison.OrdinalIgnoreCase);
             }
 
-            // 两个都是目录：按显示文本排
             return string.Compare(a.Text, b.Text, StringComparison.OrdinalIgnoreCase);
         }
 

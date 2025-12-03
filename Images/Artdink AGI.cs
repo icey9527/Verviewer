@@ -19,15 +19,12 @@ namespace Verviewer.Images
             try
             {
                 if (!s.CanSeek || s.Length < 0x30) return null;
-
                 int width = ReadUInt16At(s, 0x18);
                 int height = ReadUInt16At(s, 0x1A);
                 if (width <= 0 || height <= 0) return null;
-
                 var flag = ReadBytesAt(s, 0x2C, 4);
                 if (flag.Length < 4) return null;
                 string bppFlag = BytesToHex(flag);
-
                 return bppFlag switch
                 {
                     "44494449" => Read16bpp(s, width, height),
@@ -50,11 +47,10 @@ namespace Verviewer.Images
         static Image Read4bpp(Stream s, int width, int height)
         {
             uint palOff = ReadUInt32At(s, 0x1C);
-            if (palOff == 0) throw new ArgumentException("调色板偏移为0");
+            if (palOff == 0) throw new ArgumentException();
             s.Position = palOff;
             var palRaw = ReadExactly(s, 16 * 4);
-
-            // 预构 BGRA16
+            if (palRaw.Length < 16 * 4) throw new EndOfStreamException();
             var palBGRA = new byte[16 * 4];
             for (int i = 0; i < 16; i++)
             {
@@ -64,51 +60,56 @@ namespace Verviewer.Images
                 palBGRA[p + 2] = palRaw[p + 0];
                 palBGRA[p + 3] = FixAlpha(palRaw[p + 3]);
             }
-
             int pixelDataOffset = 0x30;
-            if (pixelDataOffset >= s.Length) throw new ArgumentException("像素偏移错误");
-
+            if (pixelDataOffset >= s.Length) throw new ArgumentException();
             s.Position = pixelDataOffset;
-            int stride = width * 4;
-            var full = new byte[stride * height];
-            var packed = new byte[(width + 1) / 2];
-
-            for (int y = 0; y < height; y++)
+            var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            var rect = new Rectangle(0, 0, width, height);
+            var bd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            try
             {
-                ReadExactlyInto(s, packed, 0, packed.Length);
-                int dst = y * stride;
-                for (int x = 0; x < width; x++)
+                int stride = bd.Stride;
+                var packed = new byte[(width + 1) / 2];
+                var row = new byte[width * 4];
+                for (int y = 0; y < height; y++)
                 {
-                    int b = packed[x >> 1];
-                    int idx = ((x & 1) == 0) ? (b & 0x0F) : ((b >> 4) & 0x0F);
-                    int pi = idx * 4;
-                    full[dst + 0] = palBGRA[pi + 0];
-                    full[dst + 1] = palBGRA[pi + 1];
-                    full[dst + 2] = palBGRA[pi + 2];
-                    full[dst + 3] = palBGRA[pi + 3];
-                    dst += 4;
+                    ReadExactlyInto(s, packed, 0, packed.Length);
+                    int dst = 0;
+                    for (int x = 0; x < width; x++)
+                    {
+                        int b = packed[x >> 1];
+                        int idx = (x & 1) == 0 ? (b & 0x0F) : ((b >> 4) & 0x0F);
+                        int pi = idx * 4;
+                        row[dst + 0] = palBGRA[pi + 0];
+                        row[dst + 1] = palBGRA[pi + 1];
+                        row[dst + 2] = palBGRA[pi + 2];
+                        row[dst + 3] = palBGRA[pi + 3];
+                        dst += 4;
+                    }
+                    IntPtr dest = IntPtr.Add(bd.Scan0, y * stride);
+                    Marshal.Copy(row, 0, dest, row.Length);
                 }
             }
-
-            return ToBitmap32(width, height, full);
+            finally
+            {
+                bmp.UnlockBits(bd);
+            }
+            return bmp;
         }
 
         static Image Read8bpp(Stream s, int width, int height)
         {
-            int palOff = ReadUInt24At(s, 0x1C); // 按原逻辑：24-bit 偏移
-            if (palOff <= 0) throw new ArgumentException("调色板偏移无效");
-
+            int palOff = ReadUInt24At(s, 0x1C);
+            if (palOff <= 0) throw new ArgumentException();
             s.Position = palOff;
             var palData = ReadExactly(s, 256 * 4);
-
+            if (palData.Length < 256 * 4) throw new EndOfStreamException();
             var original = new (byte r, byte g, byte b, byte a)[256];
             for (int i = 0; i < 256; i++)
             {
                 int p = i * 4;
                 original[i] = (palData[p + 0], palData[p + 1], palData[p + 2], FixAlpha(palData[p + 3]));
             }
-
-            // 重排
             var pal = new (byte r, byte g, byte b, byte a)[256];
             int dsti = 0;
             for (int major = 0; major < 256; major += 32)
@@ -118,122 +119,117 @@ namespace Verviewer.Images
                 for (int i = 8; i < 16; i++) pal[dsti++] = original[major + i];
                 for (int i = 24; i < 32; i++) pal[dsti++] = original[major + i];
             }
-
             int pixelDataOffset = 0x30;
-            if (pixelDataOffset >= s.Length) throw new ArgumentException("像���偏移错误");
-
+            if (pixelDataOffset >= s.Length) throw new ArgumentException();
             s.Position = pixelDataOffset;
-            int stride = width * 4;
-            var full = new byte[stride * height];
-            var row = new byte[width];
-
-            for (int y = 0; y < height; y++)
+            var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            var rect = new Rectangle(0, 0, width, height);
+            var bd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            try
             {
-                ReadExactlyInto(s, row, 0, row.Length);
-                int dst = y * stride;
-                for (int x = 0; x < width; x++)
+                int stride = bd.Stride;
+                var idxRow = new byte[width];
+                var row = new byte[width * 4];
+                for (int y = 0; y < height; y++)
                 {
-                    var p = pal[row[x]];
-                    full[dst + 0] = p.b;
-                    full[dst + 1] = p.g;
-                    full[dst + 2] = p.r;
-                    full[dst + 3] = p.a;
-                    dst += 4;
+                    ReadExactlyInto(s, idxRow, 0, idxRow.Length);
+                    int dst = 0;
+                    for (int x = 0; x < width; x++)
+                    {
+                        var p = pal[idxRow[x]];
+                        row[dst + 0] = p.b;
+                        row[dst + 1] = p.g;
+                        row[dst + 2] = p.r;
+                        row[dst + 3] = p.a;
+                        dst += 4;
+                    }
+                    IntPtr dest = IntPtr.Add(bd.Scan0, y * stride);
+                    Marshal.Copy(row, 0, dest, row.Length);
                 }
             }
-
-            return ToBitmap32(width, height, full);
+            finally
+            {
+                bmp.UnlockBits(bd);
+            }
+            return bmp;
         }
 
         static Image Read16bpp(Stream s, int width, int height)
         {
             int pixelDataOffset = 0x20;
             long need = (long)width * height * 2;
-            if (pixelDataOffset + need > s.Length) throw new ArgumentException("像素数据不足");
-
+            if (pixelDataOffset + need > s.Length) throw new ArgumentException();
             s.Position = pixelDataOffset;
-            int stride = width * 4;
-            var full = new byte[stride * height];
-            var row = new byte[width * 2];
-
-            for (int y = 0; y < height; y++)
+            var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            var rect = new Rectangle(0, 0, width, height);
+            var bd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            try
             {
-                ReadExactlyInto(s, row, 0, row.Length);
-                int src = 0, dst = y * stride;
-                for (int x = 0; x < width; x++)
+                int stride = bd.Stride;
+                var rowSrc = new byte[width * 2];
+                var row = new byte[width * 4];
+                for (int y = 0; y < height; y++)
                 {
-                    ushort px = (ushort)(row[src] | (row[src + 1] << 8));
-                    src += 2;
-
-                    int b5 = (px >> 10) & 0x1F;
-                    int g5 = (px >> 5) & 0x1F;
-                    int r5 = px & 0x1F;
-
-                    byte r = (byte)((r5 << 3) | (r5 >> 2));
-                    byte g = (byte)((g5 << 3) | (g5 >> 2));
-                    byte b = (byte)((b5 << 3) | (b5 >> 2));
-
-                    full[dst + 0] = b;
-                    full[dst + 1] = g;
-                    full[dst + 2] = r;
-                    full[dst + 3] = 255;
-                    dst += 4;
+                    ReadExactlyInto(s, rowSrc, 0, rowSrc.Length);
+                    int src = 0, dst = 0;
+                    for (int x = 0; x < width; x++)
+                    {
+                        ushort px = (ushort)(rowSrc[src] | (rowSrc[src + 1] << 8));
+                        src += 2;
+                        int b5 = (px >> 10) & 0x1F;
+                        int g5 = (px >> 5) & 0x1F;
+                        int r5 = px & 0x1F;
+                        byte r = (byte)((r5 << 3) | (r5 >> 2));
+                        byte g = (byte)((g5 << 3) | (g5 >> 2));
+                        byte b = (byte)((b5 << 3) | (b5 >> 2));
+                        row[dst + 0] = b;
+                        row[dst + 1] = g;
+                        row[dst + 2] = r;
+                        row[dst + 3] = 255;
+                        dst += 4;
+                    }
+                    IntPtr dest = IntPtr.Add(bd.Scan0, y * stride);
+                    Marshal.Copy(row, 0, dest, row.Length);
                 }
             }
-
-            return ToBitmap32(width, height, full);
+            finally
+            {
+                bmp.UnlockBits(bd);
+            }
+            return bmp;
         }
 
         static Image Read24bpp(Stream s, int width, int height)
         {
             int pixelDataOffset = 0x50;
             long need = (long)width * height * 3;
-            if (pixelDataOffset + need > s.Length) throw new ArgumentException("像素数据不足");
-
+            if (pixelDataOffset + need > s.Length) throw new ArgumentException();
             s.Position = pixelDataOffset;
-            int stride = width * 4;
-            var full = new byte[stride * height];
-            var row = new byte[width * 3];
-
-            for (int y = 0; y < height; y++)
-            {
-                ReadExactlyInto(s, row, 0, row.Length);
-                int src = 0, dst = y * stride;
-                for (int x = 0; x < width; x++)
-                {
-                    byte r = row[src++];
-                    byte g = row[src++];
-                    byte b = row[src++];
-                    full[dst + 0] = b;
-                    full[dst + 1] = g;
-                    full[dst + 2] = r;
-                    full[dst + 3] = 255;
-                    dst += 4;
-                }
-            }
-
-            return ToBitmap32(width, height, full);
-        }
-
-        static Image ToBitmap32(int width, int height, byte[] full)
-        {
             var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
             var rect = new Rectangle(0, 0, width, height);
             var bd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
             try
             {
-                int stride = width * 4;
-                if (bd.Stride == stride)
+                int stride = bd.Stride;
+                var rowSrc = new byte[width * 3];
+                var row = new byte[width * 4];
+                for (int y = 0; y < height; y++)
                 {
-                    Marshal.Copy(full, 0, bd.Scan0, full.Length);
-                }
-                else
-                {
-                    for (int y = 0; y < height; y++)
+                    ReadExactlyInto(s, rowSrc, 0, rowSrc.Length);
+                    int src = 0, dst = 0;
+                    for (int x = 0; x < width; x++)
                     {
-                        IntPtr dst = IntPtr.Add(bd.Scan0, y * bd.Stride);
-                        Marshal.Copy(full, y * stride, dst, stride);
+                        byte r = rowSrc[src++];
+                        byte g = rowSrc[src++];
+                        byte b = rowSrc[src++];
+                        row[dst + 0] = b;
+                        row[dst + 1] = g;
+                        row[dst + 2] = r;
+                        row[dst + 3] = 255;
+                        dst += 4;
                     }
+                    IntPtr dest = IntPtr.Add(bd.Scan0, y * stride);
+                    Marshal.Copy(row, 0, dest, row.Length);
                 }
             }
             finally
@@ -264,7 +260,8 @@ namespace Verviewer.Images
         {
             long save = s.Position;
             s.Position = off;
-            int lo = s.ReadByte(); int hi = s.ReadByte();
+            int lo = s.ReadByte();
+            int hi = s.ReadByte();
             s.Position = save;
             if (lo < 0 || hi < 0) return 0;
             return lo | (hi << 8);
@@ -274,7 +271,10 @@ namespace Verviewer.Images
         {
             long save = s.Position;
             s.Position = off;
-            int b0 = s.ReadByte(), b1 = s.ReadByte(), b2 = s.ReadByte(), b3 = s.ReadByte();
+            int b0 = s.ReadByte();
+            int b1 = s.ReadByte();
+            int b2 = s.ReadByte();
+            int b3 = s.ReadByte();
             s.Position = save;
             if ((b0 | b1 | b2 | b3) < 0) return 0;
             return (uint)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
@@ -284,7 +284,9 @@ namespace Verviewer.Images
         {
             long save = s.Position;
             s.Position = off;
-            int b0 = s.ReadByte(), b1 = s.ReadByte(), b2 = s.ReadByte();
+            int b0 = s.ReadByte();
+            int b1 = s.ReadByte();
+            int b2 = s.ReadByte();
             s.Position = save;
             if ((b0 | b1 | b2) < 0) return 0;
             return b0 | (b1 << 8) | (b2 << 16);
@@ -336,6 +338,7 @@ namespace Verviewer.Images
             }
             return new string(c);
         }
+
         static char GetHexNibble(int v) => (char)(v < 10 ? '0' + v : 'a' + (v - 10));
     }
 }

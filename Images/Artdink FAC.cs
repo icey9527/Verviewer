@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using Verviewer.Core;
 
 namespace Verviewer.Images
@@ -26,39 +27,49 @@ namespace Verviewer.Images
             try
             {
                 if (!s.CanSeek) return null;
-
                 long pos = FindPattern(s, MagicPattern);
                 if (pos < 0) return null;
-
                 long headerStart = pos - 0x40;
                 if (headerStart < 0) return null;
-
                 ushort w = ReadUInt16At(s, headerStart + 0x38);
                 ushort h = ReadUInt16At(s, headerStart + 0x3A);
                 if (w == 0 || h == 0) return null;
-
                 long pixelCount = (long)w * h;
                 long pixelStart = pos + 16;
                 long palStart = pixelStart + pixelCount;
-
-                // 构建调色板
                 var palette = BuildPalette(s, palStart);
                 if (palette == null) return null;
-
-                // 解像素（逐行读）
-                var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-                var row = new byte[w];
-
+                if (pixelStart < 0 || pixelStart + pixelCount > s.Length) return null;
                 s.Position = pixelStart;
-                for (int y = 0; y < h; y++)
+                var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+                var rect = new Rectangle(0, 0, w, h);
+                var bd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                try
                 {
-                    ReadExactlyInto(s, row, 0, row.Length);
-                    for (int x = 0; x < w; x++)
+                    int stride = bd.Stride;
+                    var rowIdx = new byte[w];
+                    var row = new byte[w * 4];
+                    for (int y = 0; y < h; y++)
                     {
-                        bmp.SetPixel(x, y, palette[row[x]]);
+                        ReadExactlyInto(s, rowIdx, 0, rowIdx.Length);
+                        int dst = 0;
+                        for (int x = 0; x < w; x++)
+                        {
+                            int pi = rowIdx[x] * 4;
+                            row[dst + 0] = palette[pi + 0];
+                            row[dst + 1] = palette[pi + 1];
+                            row[dst + 2] = palette[pi + 2];
+                            row[dst + 3] = palette[pi + 3];
+                            dst += 4;
+                        }
+                        IntPtr dest = IntPtr.Add(bd.Scan0, y * stride);
+                        Marshal.Copy(row, 0, dest, row.Length);
                     }
                 }
-
+                finally
+                {
+                    bmp.UnlockBits(bd);
+                }
                 return bmp;
             }
             catch
@@ -71,14 +82,13 @@ namespace Verviewer.Images
             }
         }
 
-        private static Color[]? BuildPalette(Stream s, long palOffset)
+        private static byte[]? BuildPalette(Stream s, long palOffset)
         {
             if (palOffset < 0 || palOffset + 0x400 > s.Length) return null;
-
             s.Position = palOffset;
             var palData = ReadExactly(s, 256 * 4);
-
-            var original = new (byte R, byte G, byte B, byte A)[256];
+            if (palData.Length < 256 * 4) return null;
+            var tmp = new byte[256 * 4];
             for (int i = 0; i < 256; i++)
             {
                 int off = i * 4;
@@ -86,17 +96,51 @@ namespace Verviewer.Images
                 byte g = palData[off + 1];
                 byte b = palData[off + 2];
                 byte a = FixAlpha(palData[off + 3]);
-                original[i] = (r, g, b, a);
+                tmp[off + 0] = r;
+                tmp[off + 1] = g;
+                tmp[off + 2] = b;
+                tmp[off + 3] = a;
             }
-
-            var palette = new Color[256];
+            var palette = new byte[256 * 4];
             int dst = 0;
             for (int major = 0; major < 256; major += 32)
             {
-                for (int i = 0; i < 8; i++) { var p = original[major + i]; palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B); }
-                for (int i = 16; i < 24; i++) { var p = original[major + i]; palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B); }
-                for (int i = 8; i < 16; i++) { var p = original[major + i]; palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B); }
-                for (int i = 24; i < 32; i++) { var p = original[major + i]; palette[dst++] = Color.FromArgb(p.A, p.R, p.G, p.B); }
+                for (int i = 0; i < 8; i++)
+                {
+                    int src = (major + i) * 4;
+                    palette[dst + 0] = tmp[src + 2];
+                    palette[dst + 1] = tmp[src + 1];
+                    palette[dst + 2] = tmp[src + 0];
+                    palette[dst + 3] = tmp[src + 3];
+                    dst += 4;
+                }
+                for (int i = 16; i < 24; i++)
+                {
+                    int src = (major + i) * 4;
+                    palette[dst + 0] = tmp[src + 2];
+                    palette[dst + 1] = tmp[src + 1];
+                    palette[dst + 2] = tmp[src + 0];
+                    palette[dst + 3] = tmp[src + 3];
+                    dst += 4;
+                }
+                for (int i = 8; i < 16; i++)
+                {
+                    int src = (major + i) * 4;
+                    palette[dst + 0] = tmp[src + 2];
+                    palette[dst + 1] = tmp[src + 1];
+                    palette[dst + 2] = tmp[src + 0];
+                    palette[dst + 3] = tmp[src + 3];
+                    dst += 4;
+                }
+                for (int i = 24; i < 32; i++)
+                {
+                    int src = (major + i) * 4;
+                    palette[dst + 0] = tmp[src + 2];
+                    palette[dst + 1] = tmp[src + 1];
+                    palette[dst + 2] = tmp[src + 0];
+                    palette[dst + 3] = tmp[src + 3];
+                    dst += 4;
+                }
             }
             return palette;
         }
@@ -105,18 +149,15 @@ namespace Verviewer.Images
         {
             long save = s.Position;
             s.Position = 0;
-
             const int chunk = 64 * 1024;
             int pLen = pattern.Length;
             var buffer = new byte[chunk + pLen - 1];
             long baseOffset = 0;
             int keep = 0;
-
             while (true)
             {
                 int read = s.Read(buffer, keep, chunk);
                 if (read <= 0) break;
-
                 int total = keep + read;
                 int limit = total - pLen + 1;
                 for (int i = 0; i < limit; i++)
@@ -131,12 +172,10 @@ namespace Verviewer.Images
                         return found;
                     }
                 }
-
                 keep = Math.Min(pLen - 1, total);
                 Buffer.BlockCopy(buffer, total - keep, buffer, 0, keep);
                 baseOffset += total - keep;
             }
-
             s.Position = save;
             return -1;
         }
@@ -162,7 +201,8 @@ namespace Verviewer.Images
         {
             long save = s.Position;
             s.Position = off;
-            int lo = s.ReadByte(); int hi = s.ReadByte();
+            int lo = s.ReadByte();
+            int hi = s.ReadByte();
             s.Position = save;
             if (lo < 0 || hi < 0) return 0;
             return (ushort)(lo | (hi << 8));
