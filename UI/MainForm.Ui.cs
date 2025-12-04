@@ -18,7 +18,7 @@ namespace Verviewer.UI
             _split.Panel1.Padding = new Padding(4, 4, 0, 4);
             _split.Panel2.Padding = new Padding(4, 4, 4, 4);
 
-            _entryList = new NoHScrollListView
+            _entryList = new ListView
             {
                 Dock = DockStyle.Fill,
                 View = View.Details,
@@ -26,7 +26,7 @@ namespace Verviewer.UI
                 HideSelection = false,
                 VirtualMode = true,
                 MultiSelect = true,
-                GridLines = true
+                GridLines = true,
             };
             _entryList.Columns.Add("名称", 140);
             _entryList.Columns.Add("大小", 100);

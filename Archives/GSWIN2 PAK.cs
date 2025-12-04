@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Verviewer.Core;
+using Utils;
 
 namespace Verviewer.Archives
 {
@@ -29,8 +30,8 @@ namespace Verviewer.Archives
                 if (indexSize <= 0 || fileCount < 0) throw new InvalidDataException();
                 var compressedIndex = br.ReadBytes(indexSize);
                 if (compressedIndex.Length < indexSize) throw new EndOfStreamException();
-                XorDecrypt(compressedIndex);
-                var indexData = DecompressLzss(compressedIndex, indexSize);
+                GSWIN.XorDecrypt(compressedIndex);
+                var indexData = GSWIN.Decompress(compressedIndex, indexSize);
                 const int entrySize = 0x28;
                 if (indexData.Length < fileCount * entrySize) throw new InvalidDataException();
                 var sjis = Encoding.GetEncoding(932);
@@ -68,32 +69,6 @@ namespace Verviewer.Archives
             return new SubReadStream(arc.Stream, entry.Offset, entry.Size);
         }
 
-        public static byte[] DecompressLzss(byte[] data, int compressedSize)
-        {
-            int limit = Math.Min(compressedSize, data.Length);
-            int index = 0;
-            using var output = new MemoryStream();
-            Lzss.Decompress(
-                () => index < limit ? data[index++] : -1,
-                b => output.WriteByte(b),
-                limit
-            );
-            return output.ToArray();
-        }
 
-        public static void DecompressLzss(Stream input, int compressedSize, Stream output)
-        {
-            Lzss.Decompress(
-                () => input.ReadByte(),
-                b => output.WriteByte(b),
-                compressedSize
-            );
-        }
-
-        public static byte[] XorDecrypt(byte[] data)
-        {
-            for (int i = 0; i < data.Length; i++) data[i] = (byte)(data[i] ^ (byte)i);
-            return data;
-        }
     }
 }

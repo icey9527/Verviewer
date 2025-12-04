@@ -118,14 +118,50 @@ namespace Verviewer.UI
 
                 _viewEntries.AddRange(items);
                 _entryList.VirtualListSize = _viewEntries.Count;
-
-                ( _entryList as NoHScrollListView )?.AdjustColumns();
-                _entryList.Invalidate();
             }
             finally
             {
                 _entryList.EndUpdate();
             }
+
+            // 调整列宽，避免出现水平滚动条
+            AdjustEntryListColumns();
+
+            // 使用 Refresh() 而不是 Invalidate()
+            _entryList.Refresh();
+        }
+
+        /// <summary>
+        /// 调整列表列宽，使总宽度不超过 ClientSize.Width，从而避免水平滚动条。
+        /// 只依赖标准 ListView，不需要自定义控件。
+        /// </summary>
+        void AdjustEntryListColumns()
+        {
+            if (_entryList == null) return;
+            var cols = _entryList.Columns;
+            if (cols.Count == 0) return;
+
+            int clientWidth = _entryList.ClientSize.Width;
+            if (clientWidth <= 0) return;
+
+            // 只有一列就直接铺满
+            if (cols.Count == 1)
+            {
+                cols[0].Width = clientWidth;
+                return;
+            }
+
+            // 前面的列保持当前宽度（若用户调整过，也尊重），最后一列吃掉剩余空间
+            int fixedWidth = 0;
+            for (int i = 0; i < cols.Count - 1; i++)
+                fixedWidth += cols[i].Width;
+
+            int lastWidth = clientWidth - fixedWidth;
+            // 给最后一列一个下限，防止过窄
+            if (lastWidth < 30)
+                lastWidth = 30;
+
+            cols[cols.Count - 1].Width = lastWidth;
         }
 
         static string NormalizePath(string path)
@@ -171,8 +207,8 @@ namespace Verviewer.UI
                         : string.Compare(nameB, nameA, StringComparison.CurrentCultureIgnoreCase);
 
                 case 2:
-                    string typeA = aDir ? "文件夹" : (Path.GetExtension(a.Path)?.Trim('.').ToLowerInvariant() ?? "");
-                    string typeB = bDir ? "文件夹" : (Path.GetExtension(b.Path)?.Trim('.').ToLowerInvariant() ?? "");
+                    string typeA = aDir ? "<文件夹>" : (Path.GetExtension(a.Path)?.Trim('.').ToLowerInvariant() ?? "");
+                    string typeB = bDir ? "<文件夹>" : (Path.GetExtension(b.Path)?.Trim('.').ToLowerInvariant() ?? "");
                     int ct = string.Compare(typeA, typeB, StringComparison.CurrentCultureIgnoreCase);
                     if (ct != 0) return _sortAscending ? ct : -ct;
                     return _sortAscending
@@ -223,7 +259,7 @@ namespace Verviewer.UI
             {
                 name = "..";
                 size = "";
-                type = "文件夹";
+                type = "<文件夹>";
             }
             else
             {
@@ -384,7 +420,8 @@ namespace Verviewer.UI
                 _viewEntries.Sort(CompareEntries);
             }
 
-            (_entryList as NoHScrollListView)?.AdjustColumns();
+            // 排序后也要重新调整列宽
+            AdjustEntryListColumns();
             _entryList.Invalidate();
         }
 

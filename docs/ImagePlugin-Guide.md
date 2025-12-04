@@ -1,142 +1,241 @@
-# 文件：ImagePlugin_DevGuide.md
+# 二、图片插件（Image）开发指南（无头部判断版）
 
-# 图片插件（Image）开发速记（流式 + 性能优化版）
+## 0. 原则与行为约定
 
-## 目标
+- 框架根据扩展名 / 魔术选择 `IImageHandler`；
+- 图片插件不需要也不应该再判断“是不是我”：
+  - 不要因为“文件头魔术不对”而返回 null；
+  - 只能按**既定的数据结构**去读，如果读失败就认为“数据坏了”。
 
-- 匹配由框架完成：扩展名 / 魔术命中其一即可。
-- 插件只做“图像解码”，不关心封包、容器压缩或加密。
-- 解码过程尽量：
-  - 仅按需读取；
-  - 避免中间大数组；
-  - 直接写入最终 `Bitmap` 像素缓冲。
+- `TryDecode`：
+  - 成功 → 返回 `Image`；
+  - 失败（数据损坏、不符合预期等）→ 返回 `null`；
+  - 不向外抛异常。
 
----
-
-## 注册
-
-- 使用特性：
-
-  [ImagePlugin(id, extensions, magics)]
-
-- `extensions`：扩展名数组（不带点），可为 null
-- `magics`：文件头前缀数组（从偏移 0 匹配），可为 null
-- 魔术写法：
-  - ASCII 文本，如 `"DDS "`、`"IPG"`、`"BM"`、`"\x20\x32"`；
-  - 或 `"hex:44 44 53 20"`。
+- 不要关闭原始 `stream`，只关闭你自己创建的辅助流（例如 `EnsureSeekable` 返回的 `MemoryStream`）。
 
 ---
 
-## 最小骨架（推荐写法）
+## 1. ImagePlugin 注册
 
 ```csharp
+using System;
 using System.Drawing;
 using System.IO;
 using Verviewer.Core;
+using Utils;
 
 namespace Verviewer.Images
 {
     [ImagePlugin(
-        id: "dds",
-        extensions: new[] { "dds" },
-        magics: new[] { "DDS " }
+        id: "My Image Format",
+        extensions: new[] { "img" },   // 可以是 null
+        magics:     new[] { "IMGF" }   // 可以是 null
     )]
-    internal sealed class DdsImageHandler : IImageHandler
+    internal sealed class MyImageHandler : IImageHandler
     {
         public Image? TryDecode(Stream stream, string? ext)
         {
-            if (!stream.CanRead) return null;
-            if (stream.CanSeek) stream.Position = 0;
-
-            // 这里直接解析 DDS 结构并生成 Bitmap
-            // 不要再做扩展名 / 魔术判断（框架已完成选择）
-
-            return null;
+            // 解码
         }
     }
 }
 ```
 
----
-
-## 行为约定
-
-- 不要在插件内部再做“是不是我”的判断：
-  - 不要再读取头部比对魔术或扩展名来分支。
-- 解析失败时：
-  - 可以返回 `null`（框架或 UI 会尝试其他插件/回退到 GDI 等）；
-  - 或抛出异常表示“数据损坏”。
-- 不要关闭传入的 `stream`：
-  - 如需从头读取：`if (stream.CanSeek) stream.Position = 0;`
-  - 只读取你需要的部分。
+同样：`extensions`/`magics` 用于框架选择插件，插件内部无需再做头部判断。
 
 ---
 
-## 性能与内存建议
+## 2. 推荐骨架（无头部判断版）
 
-### 1. 输出格式统一
+```csharp
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using Verviewer.Core;
+using Utils;
 
-- 推荐统一输出 `Bitmap` 的 `PixelFormat.Format32bppArgb`：
-  - 便于使用 `LockBits` + `Marshal.Copy`；
-  - 在大多数绘制管线里兼容性最好。
+namespace Verviewer.Images
+{
+    [ImagePlugin(
+        id: "My Image Format",
+        extensions: new[] { "img" }
+    )]
+    internal sealed class MyImageHandler : IImageHandler
+    {
+        public Image? TryDecode(Stream stream, string? ext)
+        {
+            // 1) 确保可 Seek
+            Stream s = stream.EnsureSeekable();
 
-### 2. 避免逐像素 API
+            try
+            {
+                if (!s.CanSeek || s.Length < 8) // 至少要能读宽高
+                    return null;
 
-- 禁用 `Bitmap.SetPixel` 等逐像素 GDI+ API（性能极差）。
-- 推荐模式：
-  - `var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);`
-  - `var data = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);`
-  - 每行维护一个 `byte[] row = new byte[width * 4];`
-  - 填满一行后：
+                // 2) 按照“格式约定”读取结构（不判断是否是本格式，只做合理性检查）
+                s.Position = 0;
 
-    `Marshal.Copy(row, 0, destPtr, row.Length);`
+                // 例如：假设前 4 字节是 width，后 4 字节是 height（小端）
+                int width  = s.ReadInt32LEAt(0);
+                int height = s.ReadInt32LEAt(4);
 
-  - 最后 `bmp.UnlockBits(data);`
+                if (width <= 0 || height <= 0 || width > 16384 || height > 16384)
+                    return null;
 
-### 3. 行缓冲 / 按需读取
+                // 3) 创建并锁定位图
+                var bmp = ImageUtils.CreateArgbBitmap(width, height, out var bd, out int stride);
 
-- 尽量使用“行缓冲 + 直接写入 Bitmap”的方式：
-  - 未压缩格式（例如简单 RGBA、IPG 这类）：
-    - 每次从 `stream` 读一行原始数据；
-    - 做必要的通道转换（如 R,G,B,A → B,G,R,A）；
-    - 写入 Bitmap 当前行；
-  - RLE / LZSS 等格式：
-    - 优先设计为“边解码边吐像素”，直接写入行缓冲，而不是先解压到整块大数组再二次遍历。
-- 只有在格式设计本身要求完整缓冲时（比如强依赖随机访问压缩数据），才考虑整块读取。
+                try
+                {
+                    // 4) 一行一行读取像素，并用 ImageUtils 写入位图
+                    // 假设后面就是 width*height 个 RGBA 像素:
+                    long pixelBytes = (long)width * height * 4;
+                    if (s.Position + pixelBytes > s.Length)
+                    {
+                        bmp.Dispose();
+                        return null;
+                    }
 
-### 4. 与封包 / 压缩层的分工
+                    var srcRow = new byte[width * 4];
+                    var row    = new byte[width * 4];
 
-- 图片插件只关心“条目文件的内容是什么图像格式”：
-  - 例如 GRP 自定义像素结构、TGA 头、某种自定义调色板等；
-  - 不负责 PAK/DAT/GRP 容器级压缩或 XOR；
-- 封包插件负责：
-  - 针对条目做完 XOR / LZSS / 其它容器级解压；
-  - 交给图片插件的 `Stream` 应该已经是“原始图像文件”。
+                    for (int y = 0; y < height; y++)
+                    {
+                        s.ReadExactly(srcRow, 0, srcRow.Length);
+                        ImageUtils.ConvertRowRgba32ToBgra(srcRow, row, width);
+                        ImageUtils.CopyRowToBitmap(bd, y, row, stride);
+                    }
 
-### 5. 与标准格式的关系
+                    return bmp;
+                }
+                catch
+                {
+                    bmp.Dispose();
+                    return null;
+                }
+                finally
+                {
+                    ImageUtils.UnlockBitmap(bd, bmp);
+                }
+            }
+            catch
+            {
+                // 任何异常都视为“解码失败”，返回 null
+                return null;
+            }
+            finally
+            {
+                if (!ReferenceEquals(s, stream))
+                    s.Dispose();
+            }
+        }
+    }
+}
+```
 
-- 标准格式（PNG/BMP/JPEG/GIF/TIFF/ICO 等）：
-  - 可以统一由一个 `StandardImageHandler` 插件处理，内部直接用 `Image.FromStream`；
-  - 其他图片插件只需关心游戏自定义格式。
-- 如果某个封包里条目本身就是标准格式（例如 dat 里是 PNG 文件）：
-  - Archive 插件只需要还原出这份 PNG 内容；
-  - 由标准图片插件解码，不要在 Archive 插件/自定义图片插件中重复做 PNG 解码。
+关键点：
 
-### 6. 解压算法位置
-
-- 对“通用、标准、在多处重用”的图像级压缩（例如同一套 LZSS 变体被多个图像格式共用）：
-  - 可以考虑抽出一个公共的解压核心（例如 `LzssCore`），只关心 `readByte` / `writeByte`；
-  - 各图片插件在外层处理自己的头部、标志位、XOR 等，然后调用核心。
-- 对“高度自定义、只用在一个格式上的”压缩：
-  - 可以直接留在该图片插件文件中，不强制抽取到公共目录。
+- 不再有 `if (magic != "XXX") return null;`；
+- 只做**结构合理性检查**（宽高范围、像素总大小不超出文件长度等）。
 
 ---
 
-## 故障处理
+## 3. 常见模式整理（给 AI 的“套路库”）
 
-- 常规解析失败（格式不符 / 数据长度不对等）：
-  - 返回 `null` 即可，框架会尝试其他插件或回退到通用处理。
-- 严重数据损坏（明显越界、结构严重不合理）：
-  - 可以抛出 `InvalidDataException` 或类似异常，方便调试问题资源。
+### 3.1 索引色图片（4bpp / 8bpp）
+
+- 固定或指向调色板偏移；
+- 调色板是 `N * 4` 字节的 RGBA；
+- 像素区按索引排列：
+
+```csharp
+// 例: 8bpp, 256 色, 调色板在 palOffset
+s.Position = palOffset;
+byte[] palRaw = s.ReadExactly(256 * 4);        // RGBA
+
+byte[] paletteBgra = ImageUtils.BuildPs2Palette256Bgra_Block32(palRaw); // PS2 样式
+// 或: paletteBgra = ImageUtils.BuildPaletteBgraFromRgba(palRaw, 256, applyPs2AlphaFix: true);
+
+s.Position = pixelDataOffset;
+
+var bmp = ImageUtils.CreateArgbBitmap(width, height, out var bd, out int stride);
+var idxRow = new byte[width];
+var row    = new byte[width * 4];
+
+try
+{
+    for (int y = 0; y < height; y++)
+    {
+        s.ReadExactly(idxRow, 0, idxRow.Length);
+        ImageUtils.ConvertRowIndexed8ToBgra(idxRow, row, width, paletteBgra);
+        ImageUtils.CopyRowToBitmap(bd, y, row, stride);
+    }
+    return bmp;
+}
+catch
+{
+    bmp.Dispose();
+    return null;
+}
+finally
+{
+    ImageUtils.UnlockBitmap(bd, bmp);
+}
+```
+
+4bpp 同理，用 `ConvertRowIndexed4ToBgra` 和 `(width+1)/2` 的 packed 行长度。
+
+### 3.2 16bpp（RGB555 / 1555 / 4444）
+
+直接用对应的行转换函数即可：
+
+```csharp
+// 假设像素起点在 pixelDataOffset, 格式为 RGB555
+s.Position = pixelDataOffset;
+var bmp = ImageUtils.CreateArgbBitmap(width, height, out var bd, out int stride);
+var rowSrc = new byte[width * 2];
+var row    = new byte[width * 4];
+
+try
+{
+    for (int y = 0; y < height; y++)
+    {
+        s.ReadExactly(rowSrc, 0, rowSrc.Length);
+        ImageUtils.ConvertRowRgb555ToBgra(rowSrc, row, width);
+        ImageUtils.CopyRowToBitmap(bd, y, row, stride);
+    }
+    return bmp;
+}
+catch
+{
+    bmp.Dispose();
+    return null;
+}
+finally
+{
+    ImageUtils.UnlockBitmap(bd, bmp);
+}
+```
+
+1555 / 4444 同理使用 `ConvertRowArgb1555ToBgra` / `ConvertRowArgb4444ToBgra`。
+
+### 3.3 24bpp / 32bpp 直读
+
+- 24bpp RGB / BGR：
+  - `ConvertRowRgb24ToBgra`
+  - `ConvertRowBgr24ToBgra`
+- 32bpp RGBA：
+  - `ConvertRowRgba32ToBgra`
+  - 或带 PS2 Alpha：`ConvertRowRgba32ToBgraWithPs2Alpha`
 
 ---
+
+## 4. 总结给“0 基础 AI”的一句话
+
+> 写图片插件 =「按已知结构读出宽高和像素数据 → 创建 32bpp 位图 → 用 ImageUtils 把每行源像素转成 BGRA 写进去」。  
+> 
+> 不要再判断“是不是这个格式”，那是插件工厂的工作；  
+> 所有流操作用 StreamUtils，所有像素和调色板转换用 ImageUtils，  
+> 解码失败就返回 null，不要关掉原始流。

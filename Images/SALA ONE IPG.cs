@@ -3,8 +3,8 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Text;
 using Verviewer.Core;
+using Utils; // StreamUtils, ImageUtils
 
 namespace Verviewer.Images
 {
@@ -17,70 +17,104 @@ namespace Verviewer.Images
     {
         public Image? TryDecode(Stream stream, string? ext)
         {
-            var reader = new BinaryReader(stream, Encoding.ASCII, true);
-            if (reader.ReadBytes(4).Length < 4) return null;
-            uint w, h;
+            Stream s = stream.EnsureSeekable();
             try
             {
-                w = reader.ReadUInt32();
-                h = reader.ReadUInt32();
+                // 头部至少 4 + 4 + 4 = 12 字节
+                if (!s.CanRead) return null;
+                if (s.Length < 12) return null;
+
+                // 读 4 字节头（原代码只是读掉，不做校验）
+                byte[] head = s.ReadExactly(4);
+
+                // 读宽高 (小端 uint32)
+                uint w, h;
+                try
+                {
+                    w = ReadUInt32LE(s);
+                    h = ReadUInt32LE(s);
+                }
+                catch
+                {
+                    return null;
+                }
+
+                if (w == 0 || h == 0 || w > int.MaxValue || h > int.MaxValue)
+                    return null;
+
+                int width = (int)w;
+                int height = (int)h;
+
+                long pixelBytes = (long)width * height * 4;
+                if (pixelBytes <= 0 || pixelBytes > int.MaxValue)
+                    return null;
+
+                // 剩余字节至少要够像素数据
+                if (s.Position + pixelBytes > s.Length)
+                    return null;
+
+                // 创建位图并锁定
+                var bmp = ImageUtils.CreateArgbBitmap(width, height, out var bmpData, out int stride);
+                bool ok = true;
+
+                try
+                {
+                    var srcRow = new byte[width * 4]; // 源 RGBA
+                    var row = new byte[width * 4];     // 目标 BGRA
+
+                    for (int y = 0; y < height; y++)
+                    {
+                        try
+                        {
+                            s.ReadExactly(srcRow, 0, srcRow.Length);
+                        }
+                        catch
+                        {
+                            ok = false;
+                            break;
+                        }
+
+                        // 源是 RGBA32 -> 转成 BGRA32
+                        ImageUtils.ConvertRowRgba32ToBgra(srcRow, row, width);
+
+                        ImageUtils.CopyRowToBitmap(bmpData, y, row, stride);
+                    }
+                }
+                finally
+                {
+                    ImageUtils.UnlockBitmap(bmpData, bmp);
+                }
+
+                if (!ok)
+                {
+                    bmp.Dispose();
+                    return null;
+                }
+
+                return bmp;
             }
             catch
             {
+                // TryDecode 失败就返回 null, 不向外抛异常
                 return null;
-            }
-            if (w == 0 || h == 0 || w > int.MaxValue || h > int.MaxValue) return null;
-            int width = (int)w;
-            int height = (int)h;
-            long pixelBytes = (long)width * height * 4;
-            if (pixelBytes <= 0 || pixelBytes > int.MaxValue) return null;
-            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            var rect = new Rectangle(0, 0, width, height);
-            var bmpData = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-            bool ok = true;
-            try
-            {
-                int stride = bmpData.Stride;
-                var row = new byte[width * 4];
-                for (int y = 0; y < height; y++)
-                {
-                    if (!ReadExact(stream, row, 0, row.Length))
-                    {
-                        ok = false;
-                        break;
-                    }
-                    for (int i = 0; i < row.Length; i += 4)
-                    {
-                        byte r = row[i];
-                        row[i] = row[i + 2];
-                        row[i + 2] = r;
-                    }
-                    IntPtr dest = IntPtr.Add(bmpData.Scan0, y * stride);
-                    Marshal.Copy(row, 0, dest, row.Length);
-                }
             }
             finally
             {
-                bitmap.UnlockBits(bmpData);
+                if (!ReferenceEquals(s, stream))
+                    s.Dispose();
             }
-            if (!ok)
-            {
-                bitmap.Dispose();
-                return null;
-            }
-            return bitmap;
         }
 
-        private static bool ReadExact(Stream stream, byte[] buffer, int offset, int count)
+        // 本地小工具: 读一个小端 UInt32 (和你 SALA PFS 里的模式一致)
+        static uint ReadUInt32LE(Stream s)
         {
-            while (count > 0)
-            {
-                int n = stream.Read(buffer, offset, count);
-                if (n <= 0) return false;
-                offset += n;
-                count -= n;
-            }
-            return true;
+            int b0 = s.ReadByte();
+            int b1 = s.ReadByte();
+            int b2 = s.ReadByte();
+            int b3 = s.ReadByte();
+            if ((b0 | b1 | b2 | b3) < 0)
+                throw new EndOfStreamException("Unexpected EOF while reading UInt32.");
+            return (uint)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
         }
     }
 }

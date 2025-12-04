@@ -1,8 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using System.Collections.Generic;
 using Verviewer.Core;
+using Utils;
 
 namespace Verviewer.Archives
 {
@@ -27,8 +28,7 @@ namespace Verviewer.Archives
 
             try
             {
-                using var br = new BinaryReader(fs, Encoding.UTF8, leaveOpen: true);
-
+                // 读 "pf0" 魔数
                 Span<byte> tag = stackalloc byte[3];
                 if (fs.Read(tag) != 3)
                     throw new InvalidDataException("SALA ONE PFS: header too short.");
@@ -36,32 +36,26 @@ namespace Verviewer.Archives
                 if (tag[0] != (byte)'p' || tag[1] != (byte)'f' || tag[2] != (byte)'0')
                     throw new InvalidDataException("SALA ONE PFS: invalid magic.");
 
-                uint fileCount = br.ReadUInt32();
+                // 文件数（小端 uint32）
+                uint fileCount = ReadUInt32LE(fs);
                 if (fileCount > 1_000_000)
                     throw new InvalidDataException("SALA ONE PFS: file count too large.");
 
                 long fileSize = fs.Length;
-                long headerSize = 7;
-                long tableSize = (long)fileCount * 268L;
+                long headerSize = 7; // 3 字节 "pf0" + 4 字节 fileCount
+                long tableSize = (long)fileCount * 268L; // 每项 256 名字 + 4 tag + 4 start + 4 length
                 if (headerSize + tableSize > fileSize)
                     throw new InvalidDataException("SALA ONE PFS: index out of range.");
 
                 for (uint i = 0; i < fileCount; i++)
                 {
-                    byte[] nameBytes = br.ReadBytes(256);
-                    if (nameBytes.Length != 256)
-                        throw new EndOfStreamException("SALA ONE PFS: unexpected EOF in name.");
-
-                    int zeroIndex = Array.IndexOf(nameBytes, (byte)0);
-                    if (zeroIndex < 0)
-                        zeroIndex = 256;
-
-                    string path = Encoding.UTF8.GetString(nameBytes, 0, zeroIndex)
+                    // 固定长度 256 字节名字，0 截断，其余填充
+                    string path = fs.ReadFixedString(256, Encoding.UTF8)
                         .Replace('\\', '/');
 
-                    uint fileTag = br.ReadUInt32();
-                    uint start = br.ReadUInt32();
-                    uint length = br.ReadUInt32();
+                    uint fileTag = ReadUInt32LE(fs); // 目前没用到，但必须读掉保持对齐
+                    uint start = ReadUInt32LE(fs);
+                    uint length = ReadUInt32LE(fs);
 
                     long startL = start;
                     long lengthL = length;
@@ -75,15 +69,13 @@ namespace Verviewer.Archives
                     if (startL > int.MaxValue || lengthL > int.MaxValue)
                         throw new InvalidDataException("SALA ONE PFS: offset/size exceeds 2GB.");
 
-                    var entry = new ArchiveEntry
+                    entries.Add(new ArchiveEntry
                     {
                         Path = path,
                         Offset = (int)startL,
                         Size = (int)lengthL,
                         IsDirectory = false
-                    };
-
-                    entries.Add(entry);
+                    });
                 }
             }
             catch
@@ -97,99 +89,24 @@ namespace Verviewer.Archives
 
         public Stream OpenEntryStream(OpenedArchive arc, ArchiveEntry entry)
         {
-            return new SubReadStream(arc.Stream, entry.Offset, entry.Size);
-        }
-    }
+            if (entry.IsDirectory)
+                throw new InvalidOperationException("Cannot open stream for directory entry.");
 
-    internal sealed class SubReadStream : Stream
-    {
-        private readonly Stream _baseStream;
-        private readonly long _start;
-        private readonly long _length;
-        private long _position;
-
-        public SubReadStream(Stream baseStream, long start, long length)
-        {
-            _baseStream = baseStream ?? throw new ArgumentNullException(nameof(baseStream));
-            _start = start;
-            _length = length;
-            _position = 0;
-
-            if (!_baseStream.CanRead)
-                throw new ArgumentException("Base stream must be readable.", nameof(baseStream));
+            return new RangeStream(arc.Stream, entry.Offset, entry.Size, leaveOpen: true);
         }
 
-        public override bool CanRead => true;
-        public override bool CanSeek => true;
-        public override bool CanWrite => false;
-        public override long Length => _length;
-
-        public override long Position
+        static uint ReadUInt32LE(Stream s)
         {
-            get => _position;
-            set => Seek(value, SeekOrigin.Begin);
-        }
+            Span<byte> buf = stackalloc byte[4];
+            int r = s.Read(buf);
+            if (r != 4)
+                throw new EndOfStreamException("SALA ONE PFS: unexpected EOF while reading UInt32.");
 
-        public override void Flush()
-        {
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            if (buffer == null)
-                throw new ArgumentNullException(nameof(buffer));
-            if (offset < 0 || count < 0 || offset + count > buffer.Length)
-                throw new ArgumentOutOfRangeException();
-
-            if (_position >= _length)
-                return 0;
-
-            long remaining = _length - _position;
-            if (count > remaining)
-                count = (int)remaining;
-
-            lock (_baseStream)
-            {
-                _baseStream.Position = _start + _position;
-                int read = _baseStream.Read(buffer, offset, count);
-                _position += read;
-                return read;
-            }
-        }
-
-        public override long Seek(long offset, SeekOrigin origin)
-        {
-            long newPos;
-            switch (origin)
-            {
-                case SeekOrigin.Begin:
-                    newPos = offset;
-                    break;
-                case SeekOrigin.Current:
-                    newPos = _position + offset;
-                    break;
-                case SeekOrigin.End:
-                    newPos = _length + offset;
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(origin), origin, null);
-            }
-
-            if (newPos < 0 || newPos > _length)
-                throw new IOException("Seek out of range.");
-
-            _position = newPos;
-            return _position;
-        }
-
-        public override void SetLength(long value)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            throw new NotSupportedException();
+            return (uint)(
+                buf[0]
+                | (buf[1] << 8)
+                | (buf[2] << 16)
+                | (buf[3] << 24));
         }
     }
 }

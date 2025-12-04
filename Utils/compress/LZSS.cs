@@ -1,6 +1,6 @@
 using System;
 
-namespace Verviewer.Archives
+namespace Utils
 {
     internal static class Lzss
     {

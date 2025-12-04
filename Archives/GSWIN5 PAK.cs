@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Verviewer.Core;
+using Utils;
 
 namespace Verviewer.Archives
 {
@@ -39,7 +40,7 @@ namespace Verviewer.Archives
                 if (compressedIndex.Length < indexSize)
                     throw new EndOfStreamException();
 
-                var indexData = GSWINArchiveHandler.DecompressLzss(compressedIndex, indexSize);
+                var indexData = GSWIN.Decompress(compressedIndex, indexSize);
 
                 const int entrySize = 0x68;
                 if (indexData.Length < fileCount * entrySize)
