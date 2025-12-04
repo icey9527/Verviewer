@@ -1,3 +1,8 @@
+// Implementation ported/adapted from:
+// punk7890/PS2-Visual-Novel-Tool
+// https://github.com/punk7890/PS2-Visual-Novel-Tool
+// Original copyright (c) 2024 punk7890
+
 using System;
 using System.Drawing;
 using System.IO;
