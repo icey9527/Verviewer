@@ -1,8 +1,12 @@
+// 参考
+//https://aluigi.altervista.org/bms/dragon_ball_z_boz.bms
+//https://github.com/akio7624/ApkIdxTemplate
+
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using System.IO.Compression;
+using System.Text;
 using Verviewer.Core;
 using Utils;
 
@@ -15,6 +19,7 @@ namespace Verviewer.Archives
     )]
     internal sealed class ArtdinkEndiPackHandler : IArchiveHandler
     {
+        static readonly byte[] PackTocSignature = Encoding.ASCII.GetBytes("PACKTOC ");
         static readonly byte[] GenestrtSignature = Encoding.ASCII.GetBytes("GENESTRT");
 
         public OpenedArchive Open(string archivePath)
@@ -50,9 +55,9 @@ namespace Verviewer.Archives
                 return Stream.Null;
 
             var s = arc.Stream;
-            long offset    = entry.Offset;
-            long physSize  = entry.Size;
-            long uncomp    = entry.UncompressedSize;
+            long offset = entry.Offset;
+            long physSize = entry.Size;
+            long uncomp = entry.UncompressedSize;
 
             bool isCompressed = uncomp > 0 && uncomp != physSize;
 
@@ -63,7 +68,7 @@ namespace Verviewer.Archives
                 throw new InvalidDataException("Compressed entry too small.");
 
             long compOffset = offset + 2;
-            long compLen    = physSize - 2;
+            long compLen = physSize - 2;
 
             var seg = new SubReadStream(s, compOffset, compLen);
             return new DeflateStream(seg, CompressionMode.Decompress);
@@ -71,284 +76,245 @@ namespace Verviewer.Archives
 
         static void ParseArchive(FileStream fs, List<ArchiveEntry> entries)
         {
-            var tmp = new byte[8];
-
-            fs.ReadExactly(tmp, 0, 8);
-            string endianStr = Encoding.ASCII.GetString(tmp, 4, 4);
-            bool little = string.Equals(endianStr, "LTLE", StringComparison.OrdinalIgnoreCase);
-
-            fs.ReadExactly(tmp, 0, 8);
-
-            var r = new EndianReader(fs, little);
-
-            string h = r.ReadAscii(8);
-            if (h != "PACKHEDR")
-                throw new InvalidDataException("Missing PACKHEDR");
-
-            long headerSizeMain = r.ReadInt64();
-            r.Skip(4 * 4 + 16);
-
-            string t = r.ReadAscii(8);
-            if (t != "PACKTOC ")
-                throw new InvalidDataException("Missing PACKTOC");
-
-            long tocHeaderSize   = r.ReadInt64();
-            long tocHeaderOffset = r.Position;
-            int  entrySize       = r.ReadInt32();
-            int  filesCount      = r.ReadInt32();
-            int  foldersCount    = r.ReadInt32();
-            r.ReadInt32(); // unused
-
-            var tocNames = ReadGenestrt(r, tocHeaderOffset, tocHeaderSize);
-
-            for (int i = 0; i < foldersCount; i++)
-                r.Skip(entrySize);
-
-            int fileRecordCount = filesCount - foldersCount;
-            for (int i = 0; i < fileRecordCount; i++)
-            {
-                r.Skip(4);
-                int  nameIndex = r.ReadInt32();
-                r.Skip(8);
-                long offset = r.ReadInt64();
-                long size   = r.ReadInt64();
-                long zsize  = r.ReadInt64();
-
-                if (size == 0)
-                    continue;
-
-                string name = GetName(tocNames, nameIndex);
-                if (string.IsNullOrEmpty(name))
-                    continue;
-
-                AddEntry(entries, name, offset, size, zsize);
-            }
-
-            r.Position = tocHeaderOffset + tocHeaderSize;
-            if (r.Position >= fs.Length)
-                return;
-
-            string fsls = r.ReadAscii(8);
-            if (fsls != "PACKFSLS")
-                throw new InvalidDataException("Missing PACKFSLS");
-
-            long fslsHeaderSize   = r.ReadInt64();
-            long fslsHeaderOffset = r.Position;
-            int  archivesCount    = r.ReadInt32();
-            r.Skip(4);
-            r.Skip(4);
-            r.ReadInt32();
-
-            var archiveNames = ReadGenestrt(r, fslsHeaderOffset, fslsHeaderSize);
-
-            for (int i = 0; i < archivesCount; i++)
-            {
-                int  nameIndex     = r.ReadInt32();
-                r.ReadInt32();
-                long archiveOffset = r.ReadInt64();
-                long archiveSize   = r.ReadInt64();
-                r.Skip(16);
-
-                string archiveName = GetName(archiveNames, nameIndex);
-                if (string.IsNullOrEmpty(archiveName))
-                    archiveName = $"archive_{i:D4}";
-
-                long ret = r.Position;
-                ParseSubArchive(r, archiveName, archiveOffset, entries);
-                r.Position = ret;
-            }
-        }
-
-        static void ParseSubArchive(EndianReader parent, string archiveName, long archiveOffset, List<ArchiveEntry> entries)
-        {
-            var s = parent.BaseStream;
-            parent.Position = archiveOffset;
-
-            s.Seek(4 + 4 + 8, SeekOrigin.Current);
-
-            var r = new EndianReader(s, parent.LittleEndian);
-
-            r.Skip(8);
-            long headerSize   = r.ReadInt64();
-            long headerOffset = r.Position;
-            r.ReadInt32();
-            int entrySize   = r.ReadInt32();
-            int filesCount  = r.ReadInt32();
-            int entriesSize = r.ReadInt32();
-            r.Skip(16);
-
-            var fileNames = ReadGenestrt(r, headerOffset, headerSize);
-
-            for (int i = 0; i < filesCount; i++)
-            {
-                int  nameIndex = r.ReadInt32();
-                int  zip       = r.ReadInt32();
-                long offset    = r.ReadInt64();
-                long size      = r.ReadInt64();
-                long zsize     = r.ReadInt64();
-
-                if (size == 0)
-                    continue;
-
-                string name = GetName(fileNames, nameIndex);
-                if (string.IsNullOrEmpty(name))
-                    name = $"file_{i:D5}";
-
-                long absoluteOffset = archiveOffset + offset;
-                AddEntry(entries, archiveName + "/" + name, absoluteOffset, size, zsize);
-            }
-        }
-
-        static void AddEntry(List<ArchiveEntry> entries, string path, long offset, long size, long zsize)
-        {
-            int physSize   = ToIntSize(zsize != 0 ? zsize : size);
-            int uncompSize = ToIntSize(size);
-
-            entries.Add(new ArchiveEntry
-            {
-                Path             = NormalizePath(path),
-                Offset           = offset,
-                Size             = physSize,
-                UncompressedSize = uncompSize,
-                IsDirectory      = false
-            });
-        }
-
-        static List<string> ReadGenestrt(EndianReader r, long headerOffset, long headerSize)
-        {
-            var s   = r.BaseStream;
-            long ret   = r.Position;
-            long start = headerOffset + headerSize;
-
-            long pos = FindSignature(s, start, GenestrtSignature);
-            r.Position = pos;
+            var r = new EndianReader(fs);
 
             string magic = r.ReadAscii(8);
-            if (magic != "GENESTRT")
-                throw new InvalidDataException("Invalid GENESTRT");
+            if (magic != "ENDILTLE" && magic != "ENDIBIGE")
+                throw new InvalidDataException($"Invalid magic: {magic}");
 
-            long dummy = r.ReadInt64();
-            int  count = r.ReadInt32();
-            r.Skip(0x0C);
+            r.LittleEndian = magic == "ENDILTLE";
 
-            var offs = new int[count];
-            for (int i = 0; i < count; i++)
-                offs[i] = r.ReadInt32();
+            long tocPos = FindPattern(fs, PackTocSignature);
+            long strPos = FindPattern(fs, GenestrtSignature);
 
-            s.AlignPosition(0x10);
-            long namesBase = s.Position;
+            if (tocPos < 0 || strPos < 0)
+                throw new InvalidDataException("Required blocks not found");
+
+            var names = ParseGenestrt(r, strPos);
+            var tocEntries = ParsePacktoc(r, tocPos, names);
+
+            BuildFileTree(tocEntries, entries);
+        }
+
+        static List<string> ParseGenestrt(EndianReader r, long strPos)
+        {
+            r.Position = strPos + 16;
+            int count = r.ReadInt32();
+
+            r.Position = strPos + 24;
+            int namesOffset = r.ReadInt32();
+
+            long offsetsBase = strPos + 32;
+            long namesBase = strPos + 16 + namesOffset;
 
             var list = new List<string>(count);
+
             for (int i = 0; i < count; i++)
             {
-                s.Position = namesBase + offs[i];
-                list.Add(ReadCString(s));
+                r.Position = offsetsBase + i * 4;
+                int relOff = r.ReadInt32();
+                r.Position = namesBase + relOff;
+                list.Add(r.ReadCString());
             }
 
-            r.Position = ret;
             return list;
         }
 
-        static long FindSignature(Stream s, long start, byte[] sig)
+        static List<TocEntry> ParsePacktoc(EndianReader r, long tocPos, List<string> names)
         {
-            const int bufSize = 65536;
-            var buf = new byte[bufSize + 8];
+            r.Position = tocPos + 16;
+            int segSize = r.ReadInt32();
+            int segCount = r.ReadInt32();
+            long basePos = tocPos + 32;
 
-            s.Position = start;
-            long abs    = start;
-            int  filled = 0;
+            var list = new List<TocEntry>(segCount);
 
-            while (true)
+            for (int i = 0; i < segCount; i++)
             {
-                int read = s.Read(buf, filled, bufSize);
-                if (read == 0)
-                    break;
+                long pos = basePos + (long)i * segSize;
 
-                filled += read;
-                int limit = filled - sig.Length + 1;
+                r.Position = pos;
+                int type = r.ReadInt32();
+                int nameIndex = r.ReadInt32();
 
-                for (int i = 0; i < limit; i++)
+                string name = nameIndex >= 0 && nameIndex < names.Count
+                    ? names[nameIndex]
+                    : string.Empty;
+
+                var e = new TocEntry
                 {
-                    bool match = true;
-                    for (int j = 0; j < sig.Length; j++)
+                    Index = i,
+                    Type = type,
+                    Name = name,
+                    IsFolder = type == 1
+                };
+
+                r.Position = pos + 16;
+
+                if (e.IsFolder)
+                {
+                    e.ChildStart = r.ReadInt32();
+                    e.ChildCount = r.ReadInt32();
+                }
+                else
+                {
+                    e.Offset = r.ReadInt64();
+                }
+
+                r.Position = pos + 24;
+                e.Size = r.ReadInt64();
+                e.ZSize = r.ReadInt64();
+
+                list.Add(e);
+            }
+
+            return list;
+        }
+
+        static void BuildFileTree(List<TocEntry> tocEntries, List<ArchiveEntry> outEntries)
+        {
+            if (tocEntries.Count == 0)
+                return;
+
+            var stack = new Stack<(int Index, string ParentPath)>();
+            stack.Push((0, string.Empty));
+
+            while (stack.Count > 0)
+            {
+                var (idx, parentPath) = stack.Pop();
+                if (idx < 0 || idx >= tocEntries.Count)
+                    continue;
+
+                var node = tocEntries[idx];
+
+                string currentPath;
+                if (idx == 0)
+                {
+                    currentPath = string.Empty;
+                }
+                else
+                {
+                    currentPath = string.IsNullOrEmpty(parentPath)
+                        ? node.Name
+                        : parentPath + "/" + node.Name;
+                }
+
+                if (node.IsFolder)
+                {
+                    for (int i = node.ChildCount - 1; i >= 0; i--)
                     {
-                        if (buf[i + j] != sig[j])
+                        int child = node.ChildStart + i;
+                        stack.Push((child, currentPath));
+                    }
+                }
+                else
+                {
+                    if (node.Size <= 0 || string.IsNullOrEmpty(currentPath))
+                        continue;
+
+                    long physSize = node.ZSize > 0 ? node.ZSize : node.Size;
+                    long uncompSize = node.Size;
+
+                    outEntries.Add(new ArchiveEntry
+                    {
+                        Path = currentPath.Replace('\\', '/'),
+                        Offset = node.Offset,
+                        Size = ToIntSize(physSize),
+                        UncompressedSize = ToIntSize(uncompSize),
+                        IsDirectory = false
+                    });
+                }
+            }
+        }
+
+        static long FindPattern(Stream s, byte[] pattern)
+        {
+            long saved = s.Position;
+            s.Position = 0;
+
+            int bufSize = 65536;
+            var buf = new byte[bufSize + pattern.Length - 1];
+            long abs = 0;
+            int overlap = 0;
+
+            try
+            {
+                while (true)
+                {
+                    int read = s.Read(buf, overlap, bufSize);
+                    if (read == 0)
+                        break;
+
+                    int total = overlap + read;
+                    int limit = total - pattern.Length + 1;
+
+                    for (int i = 0; i < limit; i++)
+                    {
+                        bool match = true;
+                        for (int j = 0; j < pattern.Length; j++)
                         {
-                            match = false;
-                            break;
+                            if (buf[i + j] != pattern[j])
+                            {
+                                match = false;
+                                break;
+                            }
+                        }
+
+                        if (match)
+                        {
+                            long pos = abs + i;
+                            s.Position = saved;
+                            return pos;
                         }
                     }
 
-                    if (match)
-                    {
-                        long pos = abs + i;
-                        s.Position = pos;
-                        return pos;
-                    }
-                }
-
-                if (filled > sig.Length - 1)
-                {
-                    int keep = sig.Length - 1;
-                    Array.Copy(buf, filled - keep, buf, 0, keep);
-                    abs    += filled - keep;
-                    filled  = keep;
+                    overlap = pattern.Length - 1;
+                    Array.Copy(buf, total - overlap, buf, 0, overlap);
+                    abs += total - overlap;
                 }
             }
-
-            throw new InvalidDataException("GENESTRT not found");
-        }
-
-        static string ReadCString(Stream s)
-        {
-            var bytes = new List<byte>(32);
-            while (true)
+            finally
             {
-                int b = s.ReadByte();
-                if (b < 0)
-                    throw new EndOfStreamException();
-                if (b == 0)
-                    break;
-                bytes.Add((byte)b);
+                s.Position = saved;
             }
-            return Encoding.ASCII.GetString(bytes.ToArray());
-        }
 
-        static string GetName(IList<string> list, int index)
-        {
-            if (index < 0 || index >= list.Count)
-                return string.Empty;
-            return list[index];
-        }
-
-        static string NormalizePath(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-                return string.Empty;
-            return path.Replace('\\', '/');
+            return -1;
         }
 
         static int ToIntSize(long value)
         {
-            if (value < 0 || value > int.MaxValue)
-                throw new InvalidDataException("Size too large for int");
+            if (value <= 0)
+                return 0;
+            if (value > int.MaxValue)
+                return int.MaxValue;
             return (int)value;
+        }
+
+        sealed class TocEntry
+        {
+            public int Index;
+            public int Type;
+            public string Name = "";
+            public bool IsFolder;
+            public int ChildStart;
+            public int ChildCount;
+            public long Offset;
+            public long Size;
+            public long ZSize;
         }
 
         sealed class EndianReader
         {
             readonly Stream _s;
-            readonly bool   _little;
             readonly byte[] _buf = new byte[8];
 
-            public EndianReader(Stream s, bool little)
+            public EndianReader(Stream s)
             {
-                _s      = s;
-                _little = little;
+                _s = s;
+                LittleEndian = true;
             }
 
-            public Stream BaseStream => _s;
-            public bool   LittleEndian => _little;
+            public bool LittleEndian { get; set; }
 
             public long Position
             {
@@ -356,35 +322,18 @@ namespace Verviewer.Archives
                 set => _s.Position = value;
             }
 
-            public void Skip(int count)
-            {
-                if (count != 0)
-                    _s.Seek(count, SeekOrigin.Current);
-            }
-
             public int ReadInt32()
             {
-                Read(4);
-                if (_little)
-                {
-                    return _buf[0]
-                         | (_buf[1] << 8)
-                         | (_buf[2] << 16)
-                         | (_buf[3] << 24);
-                }
-                else
-                {
-                    return (_buf[0] << 24)
-                         | (_buf[1] << 16)
-                         | (_buf[2] << 8)
-                         | _buf[3];
-                }
+                ReadExact(4);
+                if (LittleEndian)
+                    return _buf[0] | (_buf[1] << 8) | (_buf[2] << 16) | (_buf[3] << 24);
+                return (_buf[0] << 24) | (_buf[1] << 16) | (_buf[2] << 8) | _buf[3];
             }
 
             public long ReadInt64()
             {
-                Read(8);
-                if (_little)
+                ReadExact(8);
+                if (LittleEndian)
                 {
                     ulong v =
                         (ulong)_buf[0]
@@ -419,7 +368,22 @@ namespace Verviewer.Archives
                 return Encoding.ASCII.GetString(buf, 0, count);
             }
 
-            void Read(int count)
+            public string ReadCString()
+            {
+                var bytes = new List<byte>(32);
+                while (true)
+                {
+                    int b = _s.ReadByte();
+                    if (b < 0)
+                        throw new EndOfStreamException();
+                    if (b == 0)
+                        break;
+                    bytes.Add((byte)b);
+                }
+                return Encoding.UTF8.GetString(bytes.ToArray());
+            }
+
+            void ReadExact(int count)
             {
                 int off = 0;
                 while (off < count)
