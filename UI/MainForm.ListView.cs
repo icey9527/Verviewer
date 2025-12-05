@@ -25,27 +25,37 @@ namespace Verviewer.UI
                 if (_currentArchive == null)
                     return;
 
-                // 所有文件（目录一律由路径推导）
+                // 收集所有文件
                 var allFiles = new List<ArchiveEntry>();
+                // 收集所有明确标记的目录
+                var explicitDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
                 foreach (var src in _currentArchive.Entries)
                 {
-                    if (src.IsDirectory) continue;
                     var norm = NormalizePath(src.Path);
                     if (string.IsNullOrEmpty(norm)) continue;
 
-                    allFiles.Add(new ArchiveEntry
+                    if (src.IsDirectory)
                     {
-                        Path = norm,
-                        IsDirectory = false,
-                        Offset = src.Offset,
-                        Size = src.Size,
-                        UncompressedSize = src.UncompressedSize
-                    });
+                        explicitDirs.Add(norm);
+                    }
+                    else
+                    {
+                        allFiles.Add(new ArchiveEntry
+                        {
+                            Path = norm,
+                            IsDirectory = false,
+                            Offset = src.Offset,
+                            Size = src.Size,
+                            UncompressedSize = src.UncompressedSize
+                        });
+                    }
                 }
 
                 var items = new List<ArchiveEntry>();
                 var dirSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+                // 从文件路径推导目录
                 foreach (var f in allFiles)
                 {
                     var p = f.Path;
@@ -101,9 +111,52 @@ namespace Verviewer.UI
                     }
                 }
 
+                // 添加明确标记的目录（包括空目录）
+                foreach (var dir in explicitDirs)
+                {
+                    if (_currentDir.Length == 0)
+                    {
+                        int idx = dir.IndexOf('/');
+                        string topDir = idx > 0 ? dir.Substring(0, idx) : dir;
+                        if (dirSet.Add(topDir))
+                        {
+                            items.Add(new ArchiveEntry
+                            {
+                                Path = topDir,
+                                IsDirectory = true,
+                                Size = 0,
+                                UncompressedSize = 0
+                            });
+                        }
+                    }
+                    else
+                    {
+                        string prefix = _currentDir + "/";
+                        if (!dir.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        // 检查是否是当前目录的直接子目录
+                        string rest = dir.Substring(prefix.Length);
+                        int idx = rest.IndexOf('/');
+                        string subName = idx > 0 ? rest.Substring(0, idx) : rest;
+                        string fullDir = _currentDir + "/" + subName;
+
+                        if (dirSet.Add(fullDir))
+                        {
+                            items.Add(new ArchiveEntry
+                            {
+                                Path = fullDir,
+                                IsDirectory = true,
+                                Size = 0,
+                                UncompressedSize = 0
+                            });
+                        }
+                    }
+                }
+
                 items.Sort(CompareEntries);
 
-                // 根目录下：如果有嵌套历史，也增加 ".." 行用于“返回上一个封包”
+                // 根目录下：如果有嵌套历史，也增加 ".." 行用于"返回上一个封包"
                 // 子目录下：增加 ".." 行用于返回上一级目录
                 if (_currentDir.Length != 0 || _archiveHistory.Count > 0)
                 {
@@ -124,17 +177,10 @@ namespace Verviewer.UI
                 _entryList.EndUpdate();
             }
 
-            // 调整列宽，避免出现水平滚动条
             AdjustEntryListColumns();
-
-            // 使用 Refresh() 而不是 Invalidate()
             _entryList.Refresh();
         }
 
-        /// <summary>
-        /// 调整列表列宽，使总宽度不超过 ClientSize.Width，从而避免水平滚动条。
-        /// 只依赖标准 ListView，不需要自定义控件。
-        /// </summary>
         void AdjustEntryListColumns()
         {
             if (_entryList == null) return;
@@ -144,20 +190,17 @@ namespace Verviewer.UI
             int clientWidth = _entryList.ClientSize.Width;
             if (clientWidth <= 0) return;
 
-            // 只有一列就直接铺满
             if (cols.Count == 1)
             {
                 cols[0].Width = clientWidth;
                 return;
             }
 
-            // 前面的列保持当前宽度（若用户调整过，也尊重），最后一列吃掉剩余空间
             int fixedWidth = 0;
             for (int i = 0; i < cols.Count - 1; i++)
                 fixedWidth += cols[i].Width;
 
             int lastWidth = clientWidth - fixedWidth;
-            // 给最后一列一个下限，防止过窄
             if (lastWidth < 30)
                 lastWidth = 30;
 
@@ -280,39 +323,13 @@ namespace Verviewer.UI
 
             if (!TryGetSingleSelectedEntry(out var entry))
             {
-                _lastSelectedEntryPath = null;
-                _lastPreviewTextData = null;
-                _lastTextEntry = null;
-                _currentImageHandlerName = null;
-                _originalImage?.Dispose();
-                _originalImage = null;
-                _picPreview.Image?.Dispose();
-                _picPreview.Image = null;
-                _imagePanel.Visible = false;
-                _txtPreview.Visible = true;
-                _encodingHost.Visible = true;
-                _numZoom.Visible = false;
-                _txtPreview.Clear();
-                UpdateStatus(CurrentPluginStatus, _statusRight.Text);
+                ClearPreview();
                 return;
             }
 
             if (entry.Path.Length == 0 && entry.IsDirectory)
             {
-                _lastSelectedEntryPath = null;
-                _lastPreviewTextData = null;
-                _lastTextEntry = null;
-                _currentImageHandlerName = null;
-                _originalImage?.Dispose();
-                _originalImage = null;
-                _picPreview.Image?.Dispose();
-                _picPreview.Image = null;
-                _imagePanel.Visible = false;
-                _txtPreview.Visible = true;
-                _encodingHost.Visible = true;
-                _numZoom.Visible = false;
-                _txtPreview.Clear();
-                UpdateStatus(CurrentPluginStatus, _statusRight.Text);
+                ClearPreview();
                 return;
             }
 
@@ -320,23 +337,29 @@ namespace Verviewer.UI
 
             if (entry.IsDirectory)
             {
-                _lastPreviewTextData = null;
-                _lastTextEntry = null;
-                _currentImageHandlerName = null;
-                _originalImage?.Dispose();
-                _originalImage = null;
-                _picPreview.Image?.Dispose();
-                _picPreview.Image = null;
-                _imagePanel.Visible = false;
-                _txtPreview.Visible = true;
-                _encodingHost.Visible = true;
-                _numZoom.Visible = false;
-                _txtPreview.Clear();
-                UpdateStatus(CurrentPluginStatus, _statusRight.Text);
+                ClearPreview();
                 return;
             }
 
             PreviewEntry(entry);
+        }
+
+        void ClearPreview()
+        {
+            _lastSelectedEntryPath = null;
+            _lastPreviewTextData = null;
+            _lastTextEntry = null;
+            _currentImageHandlerName = null;
+            _originalImage?.Dispose();
+            _originalImage = null;
+            _picPreview.Image?.Dispose();
+            _picPreview.Image = null;
+            _imagePanel.Visible = false;
+            _txtPreview.Visible = true;
+            _encodingHost.Visible = true;
+            _numZoom.Visible = false;
+            _txtPreview.Clear();
+            UpdateStatus(CurrentPluginStatus, _statusRight.Text);
         }
 
         void EntryList_MouseDoubleClick(object? sender, MouseEventArgs e)
@@ -356,7 +379,6 @@ namespace Verviewer.UI
                     }
                     else if (_archiveHistory.Count > 0)
                     {
-                        // 根目录下的 ".."：返回上一个封包
                         MenuBack_Click(this, EventArgs.Empty);
                     }
                 }
@@ -420,7 +442,6 @@ namespace Verviewer.UI
                 _viewEntries.Sort(CompareEntries);
             }
 
-            // 排序后也要重新调整列宽
             AdjustEntryListColumns();
             _entryList.Invalidate();
         }

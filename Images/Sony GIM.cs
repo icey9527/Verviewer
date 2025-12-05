@@ -145,42 +145,26 @@ namespace Verviewer.Images
                 return null;
 
             long pixels = (long)width * height;
-            if (pixels <= 0 || pixels > 16384L * 16384L)
+            int pixelBytes = (int)((pixels * bpp + 7) / 8);
+
+            int maxAvailable = data.Length - imgDataOffset;
+            if (maxAvailable < pixelBytes)
                 return null;
 
-            int pixelBytes;
-            switch (imgFormat)
+            int bufferSizeToRead = maxAvailable;
+
+            if (paletteInfoOffset > 0 && imgDataOffset < paletteInfoOffset)
             {
-                case 0x00:
-                case 0x01:
-                case 0x02:
-                    if (bpp != 16) return null;
-                    pixelBytes = checked((int)(pixels * 2));
-                    break;
-                case 0x03:
-                    if (bpp != 32) return null;
-                    pixelBytes = checked((int)(pixels * 4));
-                    break;
-                case 0x04:
-                    if (bpp != 4) return null;
-                    pixelBytes = checked((int)((pixels + 1) / 2));
-                    break;
-                case 0x05:
-                    if (bpp != 8) return null;
-                    pixelBytes = checked((int)pixels);
-                    break;
-                default:
-                    return null;
+                bufferSizeToRead = Math.Min(bufferSizeToRead, paletteInfoOffset - imgDataOffset);
             }
 
-            if (imgDataOffset + pixelBytes > data.Length)
-                return null;
+            var imageBytes = new byte[bufferSizeToRead];
+            Buffer.BlockCopy(data, imgDataOffset, imageBytes, 0, bufferSizeToRead);
 
-            var imageBytes = new byte[pixelBytes];
-            Buffer.BlockCopy(data, imgDataOffset, imageBytes, 0, pixelBytes);
-
-            if (pixelOrder == 1 && bpp >= 8)
+            if (pixelOrder == 1)
+            {
                 imageBytes = Unswizzle(imageBytes, width, height, bpp);
+            }
 
             byte[] paletteBgra = null;
             if (imgFormat == 0x04 || imgFormat == 0x05)
@@ -203,93 +187,54 @@ namespace Verviewer.Images
                     return null;
 
                 int palBytes = paletteBlockEnd - palDataOffset;
-                if (palBytes <= 0 || palBytes % 4 != 0)
+                if (palBytes <= 0)
                     return null;
 
                 int colorCount = palBytes / 4;
-                if (colorCount <= 0 || colorCount > 256)
+                if (imgFormat == 0x04)
+                    colorCount = Math.Min(colorCount, 16);
+                else if (imgFormat == 0x05)
+                    colorCount = Math.Min(colorCount, 256);
+
+                if (colorCount <= 0)
                     return null;
 
                 var palRgba = new byte[palBytes];
                 Buffer.BlockCopy(data, palDataOffset, palRgba, 0, palBytes);
+
                 paletteBgra = ImageUtils.BuildPaletteBgraFromRgba(palRgba, colorCount, false);
             }
 
             var bmp = ImageUtils.CreateArgbBitmap(width, height, out var bd, out int stride);
 
-            byte[] srcRow;
-            switch (imgFormat)
-            {
-                case 0x00:
-                case 0x01:
-                case 0x02:
-                    srcRow = new byte[width * 2];
-                    break;
-                case 0x03:
-                    srcRow = new byte[width * 4];
-                    break;
-                case 0x04:
-                    srcRow = new byte[(width + 1) / 2];
-                    break;
-                case 0x05:
-                    srcRow = new byte[width];
-                    break;
-                default:
-                    bmp.Dispose();
-                    return null;
-            }
-
-            var row = new byte[width * 4];
+            int rowSizeInBytes = (width * bpp + 7) / 8;
+            byte[] srcRow = new byte[rowSizeInBytes];
+            byte[] dstRow = new byte[width * 4];
 
             try
             {
                 int srcIndex = 0;
                 for (int y = 0; y < height; y++)
                 {
-                    int rowBytes;
-                    switch (imgFormat)
-                    {
-                        case 0x00:
-                        case 0x01:
-                        case 0x02:
-                            rowBytes = width * 2;
-                            break;
-                        case 0x03:
-                            rowBytes = width * 4;
-                            break;
-                        case 0x04:
-                            rowBytes = (width + 1) / 2;
-                            break;
-                        case 0x05:
-                            rowBytes = width;
-                            break;
-                        default:
-                            bmp.Dispose();
-                            return null;
-                    }
+                    if (srcIndex + rowSizeInBytes > imageBytes.Length)
+                        break;
 
-                    if (srcIndex + rowBytes > imageBytes.Length)
-                    {
-                        bmp.Dispose();
-                        return null;
-                    }
-
-                    Buffer.BlockCopy(imageBytes, srcIndex, srcRow, 0, rowBytes);
-                    srcIndex += rowBytes;
+                    Buffer.BlockCopy(imageBytes, srcIndex, srcRow, 0, rowSizeInBytes);
+                    srcIndex += rowSizeInBytes;
 
                     switch (imgFormat)
                     {
                         case 0x00:
-                            ImageUtils.ConvertRowRgba5650ToBgra(srcRow, row, width);
+                            ImageUtils.ConvertRowRgba5650ToBgra(srcRow, dstRow, width);
                             break;
                         case 0x01:
-                            ImageUtils.ConvertRowRgba5551ToBgra(srcRow, row, width);
+                            ImageUtils.ConvertRowRgba5551ToBgra(srcRow, dstRow, width);
                             break;
                         case 0x02:
-                            ImageUtils.ConvertRowRgba4444ToBgra(srcRow, row, width);
+                            ImageUtils.ConvertRowRgba4444ToBgra(srcRow, dstRow, width);
                             break;
                         case 0x03:
-                            ImageUtils.ConvertRowRgba32ToBgra(srcRow, row, width);
+                            ImageUtils.ConvertRowRgba32ToBgra(srcRow, dstRow, width);
                             break;
                         case 0x04:
                             if (paletteBgra == null)
@@ -297,7 +242,7 @@ namespace Verviewer.Images
                                 bmp.Dispose();
                                 return null;
                             }
-                            ImageUtils.ConvertRowIndexed4ToBgra(srcRow, row, width, paletteBgra);
+                            ImageUtils.ConvertRowIndexed4ToBgra(srcRow, dstRow, width, paletteBgra);
                             break;
                         case 0x05:
                             if (paletteBgra == null)
@@ -305,11 +250,11 @@ namespace Verviewer.Images
                                 bmp.Dispose();
                                 return null;
                             }
-                            ImageUtils.ConvertRowIndexed8ToBgra(srcRow, row, width, paletteBgra);
+                            ImageUtils.ConvertRowIndexed8ToBgra(srcRow, dstRow, width, paletteBgra);
                             break;
                     }
 
-                    ImageUtils.CopyRowToBitmap(bd, y, row, stride);
+                    ImageUtils.CopyRowToBitmap(bd, y, dstRow, stride);
                 }
 
                 return bmp;
@@ -348,49 +293,83 @@ namespace Verviewer.Images
             if (src == null)
                 return Array.Empty<byte>();
 
-            int bytesPerPixel = bpp / 8;
-            if (bytesPerPixel <= 0)
-                return src;
+            int dstSize = (width * height * bpp + 7) / 8;
+            var dst = new byte[dstSize];
 
-            int needed;
-            try
+            int blockWidth = 16;
+            int blockHeight = 8;
+
+            int rowBlocks = (width + blockWidth - 1) / blockWidth;
+            int colBlocks = (height + blockHeight - 1) / blockHeight;
+
+            if (bpp >= 8)
             {
-                needed = checked(width * height * bytesPerPixel);
-            }
-            catch
-            {
-                return src;
-            }
+                int bytesPerPixel = bpp / 8;
+                int srcIndex = 0;
 
-            if (src.Length < needed)
-                return src;
-
-            if (width % 16 != 0 || height % 8 != 0)
-                return src;
-
-            var dst = new byte[src.Length];
-            int rowBlocks = width / 16;
-            int colBlocks = height / 8;
-            int srcIndex = 0;
-
-            for (int by = 0; by < colBlocks; by++)
-            {
-                for (int bx = 0; bx < rowBlocks; bx++)
+                for (int by = 0; by < colBlocks; by++)
                 {
-                    for (int row = 0; row < 8; row++)
+                    for (int bx = 0; bx < rowBlocks; bx++)
                     {
-                        for (int col = 0; col < 16; col++)
+                        for (int row = 0; row < blockHeight; row++)
                         {
-                            int x = bx * 16 + col;
-                            int y = by * 8 + row;
-                            int dstIndex = (y * width + x) * bytesPerPixel;
-                            if (srcIndex + bytesPerPixel > src.Length || dstIndex + bytesPerPixel > dst.Length)
-                                return src;
-                            Buffer.BlockCopy(src, srcIndex, dst, dstIndex, bytesPerPixel);
-                            srcIndex += bytesPerPixel;
+                            for (int col = 0; col < blockWidth; col++)
+                            {
+                                int x = bx * blockWidth + col;
+                                int y = by * blockHeight + row;
+
+                                if (x < width && y < height)
+                                {
+                                    int dstIndex = (y * width + x) * bytesPerPixel;
+
+                                    if (srcIndex + bytesPerPixel <= src.Length && dstIndex + bytesPerPixel <= dst.Length)
+                                    {
+                                        for (int b = 0; b < bytesPerPixel; b++)
+                                        {
+                                            dst[dstIndex + b] = src[srcIndex + b];
+                                        }
+                                    }
+                                }
+
+                                srcIndex += bytesPerPixel;
+                            }
                         }
                     }
                 }
+            }
+            else if (bpp == 4)
+            {
+                int byteWidth = (width + 1) / 2;
+                byte[] tempDst = new byte[byteWidth * height];
+
+                int byteRowBlocks = (byteWidth + 15) / 16;
+
+                int srcIndex = 0;
+                for (int by = 0; by < colBlocks; by++)
+                {
+                    for (int bx = 0; bx < byteRowBlocks; bx++)
+                    {
+                        for (int row = 0; row < 8; row++)
+                        {
+                            for (int col = 0; col < 16; col++)
+                            {
+                                int byteX = bx * 16 + col;
+                                int y = by * 8 + row;
+
+                                if (byteX < byteWidth && y < height)
+                                {
+                                    int dstIndex = y * byteWidth + byteX;
+                                    if (srcIndex < src.Length && dstIndex < tempDst.Length)
+                                    {
+                                        tempDst[dstIndex] = src[srcIndex];
+                                    }
+                                }
+                                srcIndex++;
+                            }
+                        }
+                    }
+                }
+                return tempDst;
             }
 
             return dst;

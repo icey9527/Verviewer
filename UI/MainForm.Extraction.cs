@@ -1,23 +1,24 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Verviewer.Archives;
 using Verviewer.Core;
-using Verviewer.Images;
 
 namespace Verviewer.UI
 {
     internal partial class MainForm
     {
-        async Task ExtractEntriesFromArchiveWithOptionsAsync(
+        async Task ExtractEntriesAsync(
             OpenedArchive archive,
-            List<ArchiveEntry> entries,
+            List<ExtractItem> items,
             string? nestedRootFolder = null)
         {
-            if (entries.Count == 0)
+            if (items.Count == 0)
             {
                 MessageBox.Show(this, "没有可提取的文件。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -30,7 +31,11 @@ namespace Verviewer.UI
 
             var exts = optForm.Extensions;
             bool excludeMode = optForm.ExcludeMode;
-            bool convertImagesToPng = optForm.ConvertImagesToPng;
+            bool imagesOnly = optForm.ImagesOnly;
+            bool convertImages = optForm.ConvertImages;
+            string imageFormat = optForm.ImageFormat;
+            bool removeAlpha = optForm.RemoveAlpha;
+            Color bgColor = optForm.BackgroundColor;
 
             using var fbd = new FolderBrowserDialog
             {
@@ -45,24 +50,30 @@ namespace Verviewer.UI
                 exts.Select(s => s.ToLowerInvariant()),
                 StringComparer.OrdinalIgnoreCase);
 
-            bool ShouldProcess(ArchiveEntry e)
+            bool PassesExtensionFilter(string path)
             {
-                string ext = Path.GetExtension(e.Path).TrimStart('.').ToLowerInvariant();
+                string ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
                 if (extSet.Count == 0) return !excludeMode;
                 bool inSet = extSet.Contains(ext);
                 return excludeMode ? !inSet : inSet;
             }
 
-            var workEntries = entries.Where(e => !e.IsDirectory && ShouldProcess(e)).ToList();
-            if (workEntries.Count == 0)
+            // 仅图像模式不过滤后缀
+            var workItems = imagesOnly
+                ? items.ToList()
+                : items.Where(x => PassesExtensionFilter(x.Entry.Path)).ToList();
+
+            if (workItems.Count == 0)
             {
                 MessageBox.Show(this, "没有匹配筛选条件的文件。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            int total = workEntries.Count;
+            int total = workItems.Count;
             int done = 0;
+            int extracted = 0;
+            int skipped = 0;
 
             _menu.Enabled = false;
             _entryList.Enabled = false;
@@ -72,53 +83,57 @@ namespace Verviewer.UI
             {
                 await Task.Run(() =>
                 {
-                    foreach (var entry in workEntries)
+                    foreach (var item in workItems)
                     {
                         try
                         {
-                            string relPath = entry.Path.Replace('/', Path.DirectorySeparatorChar);
+                            string relPath = item.OutputPath.Replace('/', Path.DirectorySeparatorChar);
                             if (!string.IsNullOrEmpty(nestedRootFolder))
                                 relPath = Path.Combine(nestedRootFolder, relPath);
 
                             string destPath = Path.Combine(targetRoot, relPath);
-                            string? destDir = Path.GetDirectoryName(destPath);
-                            if (!string.IsNullOrEmpty(destDir))
-                                Directory.CreateDirectory(destDir);
 
-                            bool written = false;
-                            if (convertImagesToPng)
+                            if (imagesOnly)
                             {
-                                try
+                                // 仅图像模式：先快速判断是否可能是图像
+                                if (!MightBeImage(archive, item.Entry))
                                 {
-                                    written = TryConvertEntryToPng(archive, entry, destPath);
+                                    skipped++;
                                 }
-                                catch
+                                else if (TryConvertAndSaveImage(archive, item.Entry, destPath, imageFormat, removeAlpha, bgColor))
                                 {
-                                    written = false;
+                                    extracted++;
+                                }
+                                else
+                                {
+                                    skipped++;
                                 }
                             }
-
-                            if (!written)
+                            else if (convertImages)
                             {
-                                try
-                                {
-                                    using var s = archive.Handler.OpenEntryStream(archive, entry);
-                                    using var outFs = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, FileOptions.SequentialScan);
-                                    s.CopyTo(outFs);
-                                }
-                                catch (Exception ex)
-                                {
-                                    string pathCopy = destPath;
-                                    Invoke((Action)(() =>
-                                    {
-                                        MessageBox.Show(this,
-                                            $"写入文件失败：\n{pathCopy}\n{ex.Message}",
-                                            "提取错误",
-                                            MessageBoxButtons.OK,
-                                            MessageBoxIcon.Warning);
-                                    }));
-                                }
+                                // 普通模式+转换：尝试转换，失败则保存原始
+                                if (!TryConvertAndSaveImage(archive, item.Entry, destPath, imageFormat, removeAlpha, bgColor))
+                                    SaveOriginalFile(archive, item.Entry, destPath);
+                                extracted++;
                             }
+                            else
+                            {
+                                // 普通模式：直接保存原始
+                                SaveOriginalFile(archive, item.Entry, destPath);
+                                extracted++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            string pathCopy = item.OutputPath;
+                            Invoke((Action)(() =>
+                            {
+                                MessageBox.Show(this,
+                                    $"处理文件失败：\n{pathCopy}\n{ex.Message}",
+                                    "提取错误",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Warning);
+                            }));
                         }
                         finally
                         {
@@ -130,11 +145,13 @@ namespace Verviewer.UI
                             }
                         }
                     }
-
-                    Invoke((Action)(() => UpdateStatus(CurrentPluginStatus, $"{done} / {total}")));
                 });
 
-                MessageBox.Show(this, "提取完成。", "完成",
+                string message = imagesOnly
+                    ? $"提取完成。\n成功：{extracted} 个，跳过：{skipped} 个"
+                    : $"提取完成。共 {extracted} 个文件。";
+
+                MessageBox.Show(this, message, "完成",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             finally
@@ -145,24 +162,136 @@ namespace Verviewer.UI
             }
         }
 
-        bool TryConvertEntryToPng(OpenedArchive archive, ArchiveEntry entry, string destPath)
+        /// <summary>
+        /// 快速判断文件是否可能是图像（通过后缀和魔数匹配，不实际解码）
+        /// </summary>
+        bool MightBeImage(OpenedArchive archive, ArchiveEntry entry)
         {
-            Image? img = null;
+            try
+            {
+                int headerLen = Math.Max(16, PluginFactory.MaxImageHeaderLength);
+                byte[] header;
+
+                using (var s = archive.Handler.OpenEntryStream(archive, entry))
+                {
+                    header = new byte[headerLen];
+                    int read = s.Read(header, 0, header.Length);
+                    if (read < header.Length)
+                        Array.Resize(ref header, read);
+                }
+
+                var types = PluginFactory.ResolveImageTypes(entry.Path, header);
+                return types.Count > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        bool TryConvertAndSaveImage(
+            OpenedArchive archive,
+            ArchiveEntry entry,
+            string destPath,
+            string format,
+            bool removeAlpha,
+            Color bgColor)
+        {
+            Image? img;
             try
             {
                 img = TryDecodeImage(archive, entry, out _);
             }
             catch
             {
-                img = null;
+                return false;
             }
-            if (img == null) return false;
 
-            string pngPath = Path.ChangeExtension(destPath, ".png");
-            Directory.CreateDirectory(Path.GetDirectoryName(pngPath)!);
-            img.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
-            img.Dispose();
-            return true;
+            if (img == null)
+                return false;
+
+            try
+            {
+                // 去除透明通道
+                if (removeAlpha && img is Bitmap bmp && HasAlphaChannel(bmp))
+                {
+                    var flattened = FlattenAlpha(bmp, bgColor);
+                    img.Dispose();
+                    img = flattened;
+                }
+
+                // 确定输出路径：保留原后缀，追加图片后缀
+                var (imgFormat, ext) = GetImageFormat(format);
+                string outputPath = destPath + ext; // file.tlg -> file.tlg.png
+
+                string? outputDir = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(outputDir))
+                    Directory.CreateDirectory(outputDir);
+
+                // 保存
+                if (format.Equals("jpg", StringComparison.OrdinalIgnoreCase) ||
+                    format.Equals("jpeg", StringComparison.OrdinalIgnoreCase))
+                {
+                    SaveAsJpeg(img, outputPath, 95);
+                }
+                else
+                {
+                    img.Save(outputPath, imgFormat);
+                }
+
+                return true;
+            }
+            finally
+            {
+                img.Dispose();
+            }
+        }
+
+        void SaveOriginalFile(OpenedArchive archive, ArchiveEntry entry, string destPath)
+        {
+            string? destDir = Path.GetDirectoryName(destPath);
+            if (!string.IsNullOrEmpty(destDir))
+                Directory.CreateDirectory(destDir);
+
+            using var s = archive.Handler.OpenEntryStream(archive, entry);
+            using var outFs = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, FileOptions.SequentialScan);
+            s.CopyTo(outFs);
+        }
+
+        static bool HasAlphaChannel(Bitmap bmp) => Image.IsAlphaPixelFormat(bmp.PixelFormat);
+
+        static Bitmap FlattenAlpha(Bitmap source, Color bgColor)
+        {
+            var result = new Bitmap(source.Width, source.Height, PixelFormat.Format24bppRgb);
+            using var g = Graphics.FromImage(result);
+            g.Clear(bgColor);
+            g.DrawImage(source, 0, 0, source.Width, source.Height);
+            return result;
+        }
+
+        static (ImageFormat format, string ext) GetImageFormat(string name) => name.ToLowerInvariant() switch
+        {
+            "jpg" or "jpeg" => (ImageFormat.Jpeg, ".jpg"),
+            "bmp" => (ImageFormat.Bmp, ".bmp"),
+            "gif" => (ImageFormat.Gif, ".gif"),
+            "tiff" or "tif" => (ImageFormat.Tiff, ".tiff"),
+            _ => (ImageFormat.Png, ".png")
+        };
+
+        static void SaveAsJpeg(Image img, string path, int quality)
+        {
+            var encoder = ImageCodecInfo.GetImageEncoders()
+                .FirstOrDefault(c => c.FormatID == ImageFormat.Jpeg.Guid);
+
+            if (encoder == null)
+            {
+                img.Save(path, ImageFormat.Jpeg);
+                return;
+            }
+
+            using var encoderParams = new EncoderParameters(1);
+            encoderParams.Param[0] = new EncoderParameter(Encoder.Quality, quality);
+            img.Save(path, encoder, encoderParams);
         }
 
         async void ExtractMenu_Click(object? sender, EventArgs e)
@@ -174,11 +303,12 @@ namespace Verviewer.UI
                 return;
             }
 
-            var entries = _currentArchive.Entries
+            var items = _currentArchive.Entries
                 .Where(x => !x.IsDirectory)
+                .Select(x => new ExtractItem(x, x.Path))
                 .ToList();
 
-            await ExtractEntriesFromArchiveWithOptionsAsync(_currentArchive, entries, null);
+            await ExtractEntriesAsync(_currentArchive, items, null);
         }
 
         async void EntryContext_ExtractSelected_Click(object? sender, EventArgs e)
@@ -193,46 +323,9 @@ namespace Verviewer.UI
                 return;
             }
 
-            var files = new List<ArchiveEntry>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var items = CollectExtractItems(_currentArchive, selected);
 
-            foreach (var entry in selected)
-            {
-                if (entry.IsDirectory)
-                {
-                    if (entry.Path.Length == 0)
-                        continue;
-
-                    string prefix = entry.Path.TrimEnd('/', '\\');
-                    foreach (var ent in _currentArchive.Entries.Where(x => !x.IsDirectory))
-                    {
-                        string p = NormalizePath(ent.Path);
-                        if (p.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
-                            p.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (seen.Add(p))
-                            {
-                                files.Add(new ArchiveEntry
-                                {
-                                    Path = p,
-                                    IsDirectory = false,
-                                    Offset = ent.Offset,
-                                    Size = ent.Size,
-                                    UncompressedSize = ent.UncompressedSize
-                                });
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    string p = entry.Path;
-                    if (seen.Add(p))
-                        files.Add(entry);
-                }
-            }
-
-            if (files.Count == 0)
+            if (items.Count == 0)
             {
                 MessageBox.Show(this, "没有可提取的文件。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -245,13 +338,63 @@ namespace Verviewer.UI
                     return;
             }
 
-            await ExtractEntriesFromArchiveWithOptionsAsync(_currentArchive, files, null);
+            await ExtractEntriesAsync(_currentArchive, items, null);
+        }
+
+        List<ExtractItem> CollectExtractItems(OpenedArchive archive, List<ArchiveEntry> selected)
+        {
+            var result = new List<ExtractItem>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var entry in selected)
+            {
+                if (entry.IsDirectory)
+                {
+                    string prefix = NormalizePath(entry.Path).TrimEnd('/');
+                    if (prefix.Length == 0) continue;
+
+                    foreach (var ent in archive.Entries.Where(x => !x.IsDirectory))
+                    {
+                        string fullPath = NormalizePath(ent.Path);
+                        if (!IsUnderFolder(fullPath, prefix)) continue;
+                        if (!seen.Add(fullPath)) continue;
+
+                        string relativePath = GetRelativeFromParent(fullPath, prefix);
+                        result.Add(new ExtractItem(ent, relativePath));
+                    }
+                }
+                else
+                {
+                    string fullPath = NormalizePath(entry.Path);
+                    if (!seen.Add(fullPath)) continue;
+
+                    string fileName = Path.GetFileName(fullPath);
+                    result.Add(new ExtractItem(entry, fileName));
+                }
+            }
+
+            return result;
+        }
+
+        static bool IsUnderFolder(string path, string folder) =>
+            path.Equals(folder, StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase);
+
+        static string GetRelativeFromParent(string fullPath, string folderPrefix)
+        {
+            int lastSlash = folderPrefix.LastIndexOf('/');
+            if (lastSlash < 0) return fullPath;
+
+            string parentPath = folderPrefix.Substring(0, lastSlash + 1);
+            return fullPath.StartsWith(parentPath, StringComparison.OrdinalIgnoreCase)
+                ? fullPath.Substring(parentPath.Length)
+                : fullPath;
         }
 
         async Task<bool> TryExtractNestedArchiveForFileAsync(ArchiveEntry entry)
         {
             if (_currentArchive == null) return false;
-            if (!(_currentArchive.Handler is FolderArchiveHandler)) return false;
+            if (_currentArchive.Handler is not FolderArchiveHandler) return false;
 
             string rootFolder = _currentArchive.SourcePath;
             string relPath = entry.Path.Replace('/', Path.DirectorySeparatorChar);
@@ -266,43 +409,31 @@ namespace Verviewer.UI
                     var types = PluginFactory.ResolveArchiveTypes(fullPath, fsProbe).ToList();
                     if (types.Count == 0) return false;
 
-                    Exception? lastError = null;
                     foreach (var type in types)
                     {
-                        IArchiveHandler? handler;
                         try
                         {
-                            handler = Activator.CreateInstance(type) as IArchiveHandler;
+                            if (Activator.CreateInstance(type) is IArchiveHandler handler)
+                            {
+                                nested = handler.Open(fullPath);
+                                break;
+                            }
                         }
-                        catch
-                        {
-                            continue;
-                        }
-
-                        if (handler == null) continue;
-
-                        try
-                        {
-                            nested = handler.Open(fullPath);
-                            break;
-                        }
-                        catch (Exception ex)
-                        {
-                            lastError = ex;
-                        }
+                        catch { }
                     }
 
                     if (nested == null) return false;
                 }
 
-                var nestedEntries = nested.Entries.Where(x => !x.IsDirectory).ToList();
-                if (nestedEntries.Count == 0) return false;
+                var nestedItems = nested.Entries
+                    .Where(x => !x.IsDirectory)
+                    .Select(x => new ExtractItem(x, x.Path))
+                    .ToList();
+
+                if (nestedItems.Count == 0) return false;
 
                 string folderName = Path.GetFileNameWithoutExtension(fullPath);
-                await ExtractEntriesFromArchiveWithOptionsAsync(
-                    nested,
-                    nestedEntries,
-                    folderName);
+                await ExtractEntriesAsync(nested, nestedItems, folderName);
 
                 return true;
             }
@@ -313,6 +444,18 @@ namespace Verviewer.UI
             finally
             {
                 nested?.Dispose();
+            }
+        }
+
+        readonly struct ExtractItem
+        {
+            public ArchiveEntry Entry { get; }
+            public string OutputPath { get; }
+
+            public ExtractItem(ArchiveEntry entry, string outputPath)
+            {
+                Entry = entry;
+                OutputPath = outputPath;
             }
         }
     }

@@ -119,7 +119,7 @@ namespace Verviewer.Archives
                     Path = path,
                     IsDirectory = isDir,
                     Offset = e.Offset,
-                    Size = (int)e.Size,
+                    Size = (int)e.UncompressedSize,
                     UncompressedSize = (int)e.UncompressedSize
                 });
             }

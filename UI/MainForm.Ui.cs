@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -156,9 +157,16 @@ namespace Verviewer.UI
             };
             _menuExtractItem.Click += ExtractMenu_Click;
 
+            // === 关于菜单 ===
+            var menuAbout = new ToolStripMenuItem("关于");
+            var checkUpdateItem = new ToolStripMenuItem("检查更新(&U)", null, CheckUpdate_Click);
+            var githubItem = new ToolStripMenuItem("GitHub 主页(&G)", null, OpenGitHub_Click);
+            menuAbout.DropDownItems.Add(checkUpdateItem);
+            menuAbout.DropDownItems.Add(githubItem);
 
             _menu.Items.Add(menuOpen);
             _menu.Items.Add(_menuExtractItem);
+            _menu.Items.Add(menuAbout);
 
             MainMenuStrip = _menu;
 
@@ -168,6 +176,48 @@ namespace Verviewer.UI
 
             ResumeLayout(false);
             PerformLayout();
+        }
+
+        void CheckUpdate_Click(object? sender, EventArgs e)
+        {
+            const string releaseUrl = "https://github.com/icey9527/Verviewer/releases";
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = releaseUrl,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    $"无法打开浏览器：\n{ex.Message}",
+                    "错误",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+
+        void OpenGitHub_Click(object? sender, EventArgs e)
+        {
+            const string repoUrl = "https://github.com/icey9527/Verviewer";
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = repoUrl,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    $"无法打开浏览器：\n{ex.Message}",
+                    "错误",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
         }
     }
 }

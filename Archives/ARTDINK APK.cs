@@ -9,7 +9,7 @@ using Utils;
 namespace Verviewer.Archives
 {
     [ArchivePlugin(
-        id: "Artdink ENDI PACK",
+        id: "Artdink APK",
         extensions: new[] { "apk" },
         magics: new[] { "ENDILTLE", "ENDIBIGE" }
     )]
