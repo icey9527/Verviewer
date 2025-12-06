@@ -9,6 +9,7 @@ namespace Utils
         {
             output = Array.Empty<byte>();
             if (data == null || data.Length < 8) return false;
+
             using var ms = new MemoryStream(data, false);
             return Decompress(ms, data.Length, out output);
         }
@@ -19,148 +20,72 @@ namespace Utils
             if (input == null || !input.CanRead || compressedSize < 8) return false;
 
             var header = new byte[8];
-            int readHeader = input.Read(header, 0, 8);
-            if (readHeader < 8) return false;
+            if (input.Read(header, 0, 8) < 8) return false;
 
-            uint expectedSizeRaw = BitConverter.ToUInt32(header, 4);
-            if (expectedSizeRaw == 0 || expectedSizeRaw > int.MaxValue) return false;
+            var mode = ParseMode(header[3]);
+            if (mode < 0) return false;
 
-            int expectedSize = (int)expectedSizeRaw;
-            int remaining = compressedSize - 8;
+            var hasPrefix = false;
+            if (header[0] == (byte)'A' && header[1] == (byte)'R' && header[2] == (byte)'Z')
+                hasPrefix = true;
+            else if (header[0] == (byte)' ' && header[1] == (byte)'3' && header[2] == (byte)';')
+                hasPrefix = true;
 
-            var dict = new byte[0x1000];
-            uint dictPos = 0xFEE;
-            uint control = 0;
-            int outIndex = 0;
+            if (!hasPrefix) return false;
+
+            var sizeRaw = BitConverter.ToUInt32(header, 4);
+            if (sizeRaw == 0 || sizeRaw > int.MaxValue) return false;
+
+            var expectedSize = (int)sizeRaw;
             var buffer = new byte[expectedSize];
+            var outIndex = 0;
+            var remaining = compressedSize - 8;
 
-            bool isMode1 = compressedSize > 3 &&
-                           header[1] == (byte)'3' &&
-                           header[2] == (byte)';' &&
-                           header[3] == (byte)'1';
-
-            bool isMode0 = compressedSize > 3 &&
-                           header[1] == (byte)'3' &&
-                           header[2] == (byte)';' &&
-                           header[3] == (byte)'0';
-
-            if (isMode1)
+            Func<int> readByte = () =>
             {
-                bool stop = false;
-                while (!stop)
-                {
-                    while (true)
-                    {
-                        control >>= 1;
-                        uint temp = control;
+                if (remaining <= 0) return -1;
+                var b = input.ReadByte();
+                if (b < 0) return -1;
+                remaining--;
+                return b ^ 0x72;
+            };
 
-                        if ((control & 0x100) == 0)
-                        {
-                            if (remaining <= 0)
-                            {
-                                stop = true;
-                                break;
-                            }
+            Action<byte> writeByte = v =>
+            {
+                if (outIndex < expectedSize)
+                    buffer[outIndex++] = v;
+            };
 
-                            int pb = input.ReadByte();
-                            if (pb < 0)
-                            {
-                                stop = true;
-                                break;
-                            }
+            if (mode != 0 && mode != 1) return false;
 
-                            remaining--;
-                            byte x = (byte)(pb ^ 0x72);
-                            control = (uint)(x | 0xFF00);
-                            temp = x;
-                        }
-
-                        if ((temp & 1) != 0)
-                            break;
-
-                        if (remaining <= 1)
-                        {
-                            stop = true;
-                            break;
-                        }
-
-                        int b1 = input.ReadByte();
-                        int b2 = input.ReadByte();
-                        if (b1 < 0 || b2 < 0)
-                        {
-                            stop = true;
-                            break;
-                        }
-                        remaining -= 2;
-
-                        int cnt = 0;
-                        int len = ((b2 ^ 0x72) & 0x0F) + 2;
-
-                        while (cnt <= len)
-                        {
-                            uint offset = (uint)((b1 ^ 0x72) |
-                                                 (((b2 ^ 0x72) & 0xF0) << 4));
-                            offset += (uint)cnt;
-                            cnt++;
-
-                            byte value = dict[offset & 0x0FFF];
-
-                            if (outIndex >= expectedSize)
-                            {
-                                stop = true;
-                                break;
-                            }
-
-                            buffer[outIndex++] = value;
-                            dict[dictPos] = value;
-                            dictPos = (dictPos + 1) & 0x0FFF;
-                        }
-
-                        if (stop)
-                            break;
-                    }
-
-                    if (stop)
-                        break;
-
-                    if (remaining <= 0)
-                        break;
-
-                    int b = input.ReadByte();
-                    if (b < 0) break;
-                    remaining--;
-
-                    byte value2 = (byte)(b ^ 0x72);
-
-                    if (outIndex >= expectedSize)
-                        break;
-
-                    buffer[outIndex++] = value2;
-                    dict[dictPos] = value2;
-                    dictPos = (dictPos + 1) & 0x0FFF;
-                }
-            }
-            else if (isMode0)
+            if (mode == 0)
             {
                 while (remaining > 0 && outIndex < expectedSize)
                 {
-                    int b = input.ReadByte();
+                    var b = readByte();
                     if (b < 0) break;
-                    remaining--;
-                    buffer[outIndex++] = (byte)(b ^ 0x72);
+                    writeByte((byte)b);
                 }
             }
-            else
+            else if (mode == 1)
             {
-                return false;
+                Lzss.Decompress(readByte, writeByte, remaining);
             }
-
-            if (outIndex < 0) outIndex = 0;
-            if (outIndex > expectedSize) outIndex = expectedSize;
 
             output = new byte[outIndex];
             Buffer.BlockCopy(buffer, 0, output, 0, outIndex);
             return true;
+        }
+
+        static int ParseMode(byte value)
+        {
+            if (value >= (byte)'0' && value <= (byte)'9')
+                return value - (byte)'0';
+            if (value >= (byte)'A' && value <= (byte)'F')
+                return value - (byte)'A' + 10;
+            if (value >= (byte)'a' && value <= (byte)'f')
+                return value - (byte)'a' + 10;
+            return -1;
         }
     }
 }

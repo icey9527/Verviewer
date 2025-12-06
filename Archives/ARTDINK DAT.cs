@@ -14,45 +14,26 @@ namespace Verviewer.Archives
     )]
     internal class Artdink_DAT : IArchiveHandler
     {
+        static readonly Encoding ShiftJis = Encoding.GetEncoding(932);
+
         public OpenedArchive Open(string archivePath)
         {
             var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             var br = new BinaryReader(fs, Encoding.ASCII, leaveOpen: true);
+            var header = ReadHeader(br);
 
-            fs.Position = 0x8;
-            uint flag = br.ReadUInt32();
-            if (flag != 1)
+            var entries = new List<ArchiveEntry>();
+            var dirs = new HashSet<string>();
+            var fileMap = new Dictionary<string, ArchiveEntry>();
+
+            if (header.Table2Count > 0)
             {
-                br.Dispose();
-                fs.Dispose();
-                throw new InvalidDataException();
+                var table2 = ParseTable2(fs, br, header);
+                CollectTable2Entries(entries, dirs, fileMap, table2, header);
             }
 
-            fs.Position = 0xC;
-            uint start = br.ReadUInt32();
-            uint indexCount = br.ReadUInt32();
-
-            fs.Position = 0x20;
-            uint nameStart = br.ReadUInt32();
-
-            uint subIndexCount = 0;
-            if (fs.Length >= 0x54)
-            {
-                fs.Position = 0x50;
-                subIndexCount = br.ReadUInt32();
-            }
-
-            List<ArchiveEntry> entries;
-            if (subIndexCount > 0)
-            {
-                entries = ParseNestedFsts(fs, br, start, nameStart, subIndexCount);
-                if (entries.Count == 0)
-                    entries = ParseFlatDatIndex(fs, br, start, indexCount, nameStart);
-            }
-            else
-            {
-                entries = ParseFlatDatIndex(fs, br, start, indexCount, nameStart);
-            }
+            if (header.Table3Size > 0)
+                CollectTable3Entries(entries, dirs, fileMap, fs, br, header);
 
             br.Dispose();
             return new OpenedArchive(archivePath, fs, entries, this);
@@ -60,171 +41,266 @@ namespace Verviewer.Archives
 
         public Stream OpenEntryStream(OpenedArchive archive, ArchiveEntry entry)
         {
-            if (entry.IsDirectory) throw new InvalidOperationException();
+            if (entry.IsDirectory)
+                throw new InvalidOperationException();
 
             var fs = archive.Stream;
+            if (entry.Offset > fs.Length)
+                return Stream.Null;
 
-            if (entry.Size > 0)
-            {
-                fs.Position = entry.Offset;
-                if (Artdink.Decompress(fs, entry.Size, out var dec))
-                    return new MemoryStream(dec, false);
-            }
+            fs.Position = entry.Offset;
+
+            if (entry.Size > 0 && Artdink.Decompress(fs, entry.Size, out var dec))
+                return new MemoryStream(dec, false);
 
             int rawSize = entry.UncompressedSize > 0 ? entry.UncompressedSize : entry.Size;
-            if (rawSize <= 0) return Stream.Null;
+            if (rawSize <= 0)
+                return Stream.Null;
 
-            var raw = new byte[rawSize];
             fs.Position = entry.Offset;
+            var raw = new byte[rawSize];
             int read = fs.Read(raw, 0, raw.Length);
-            if (read < raw.Length) Array.Resize(ref raw, read);
+            if (read < raw.Length)
+                Array.Resize(ref raw, read);
             return new MemoryStream(raw, false);
         }
 
-        List<ArchiveEntry> ParseFlatDatIndex(FileStream fs, BinaryReader br, uint indexStart, uint indexCount, uint nameStart)
+        PidxHeader ReadHeader(BinaryReader br)
         {
-            var datEntries = new List<DatEntry>();
-
-            fs.Position = indexStart;
-            for (int i = 0; i < indexCount; i++)
+            br.BaseStream.Position = 0;
+            return new PidxHeader
             {
-                var e = new DatEntry
-                {
-                    Index = i,
-                    Type = br.ReadUInt32(),
-                    NameOffset = br.ReadUInt32(),
-                    Sign = br.ReadUInt32(),
-                    Offset = br.ReadUInt32(),
-                    UncompressedSize = br.ReadUInt32(),
-                    Size = br.ReadUInt32()
-                };
-                datEntries.Add(e);
-            }
-
-            var encSjis = Encoding.GetEncoding(932);
-            foreach (var e in datEntries)
-            {
-                long namePos = nameStart + e.NameOffset;
-                e.FileName = fs.ReadNullTerminatedStringAt(namePos, encSjis);
-            }
-
-            var entries = new List<ArchiveEntry>(datEntries.Count);
-            foreach (var e in datEntries)
-            {
-                bool isDir = e.Type == 1;
-                string path = e.FileName.Replace('\\', '/');
-
-                entries.Add(new ArchiveEntry
-                {
-                    Path = path,
-                    IsDirectory = isDir,
-                    Offset = e.Offset,
-                    Size = (int)e.UncompressedSize,
-                    UncompressedSize = (int)e.UncompressedSize
-                });
-            }
-
-            return entries;
+                Magic = Encoding.ASCII.GetString(br.ReadBytes(4)),
+                Table1Offset = br.ReadUInt32(),
+                Table1Count = br.ReadUInt32(),
+                Table2Offset = br.ReadUInt32(),
+                Table2Count = br.ReadUInt32(),
+                RootDirectoryChildCount = br.ReadUInt32(),
+                Table3Offset = br.ReadUInt32(),
+                Table3Size = br.ReadUInt32(),
+                StringPoolOffset = br.ReadUInt32(),
+                StringPoolSize = br.ReadUInt32()
+            };
         }
 
-        List<ArchiveEntry> ParseNestedFsts(FileStream fs, BinaryReader br, uint start, uint nameStart, uint subIndexCount)
+        List<Table2Entry> ParseTable2(FileStream fs, BinaryReader br, PidxHeader header)
         {
-            var result = new List<ArchiveEntry>();
-
-            long subIndexStart = start + 4;
-            uint[] subPtrs = new uint[subIndexCount];
-            for (uint i = 0; i < subIndexCount; i++)
+            var list = new List<Table2Entry>((int)header.Table2Count);
+            for (uint i = 0; i < header.Table2Count; i++)
             {
-                fs.Position = subIndexStart + i * 4;
-                uint pointer = br.ReadUInt32();
-                subPtrs[i] = pointer + start;
-            }
-
-            var encSjis = Encoding.GetEncoding(932);
-
-            for (uint i = 0; i < subIndexCount; i++)
-            {
-                fs.Position = subPtrs[i];
-
+                fs.Position = header.Table2Offset + i * 24;
+                uint type = br.ReadUInt32();
                 uint nameOffset = br.ReadUInt32();
-                uint placeholder = br.ReadUInt32();
-                uint fstOffset = br.ReadUInt32();
-                uint fstSize = br.ReadUInt32();
-                uint num = br.ReadUInt32();
+                uint field08 = br.ReadUInt32();
+                uint field0C = br.ReadUInt32();
+                uint field10 = br.ReadUInt32();
+                uint field14 = br.ReadUInt32();
 
-                string name = fs.ReadNullTerminatedStringAt(nameStart + nameOffset, encSjis);
-                string prefix = name.Replace('\\', '/').Trim('/');
+                var entry = new Table2Entry
+                {
+                    Name = ReadStringAt(fs, header.StringPoolOffset + nameOffset),
+                    IsDirectory = type == 1
+                };
 
-                ParseFstsAt(fs, fstOffset, fstSize, prefix, result);
+                if (entry.IsDirectory)
+                {
+                    entry.ChildCount = field08;
+                    entry.ChildStart = field0C;
+                }
+                else
+                {
+                    entry.DataOffset = field0C;
+                    entry.DecompressedSize = field10;
+                    entry.CompressedSize = field14;
+                }
+
+                list.Add(entry);
             }
 
-            return result;
+            return list;
         }
 
-        void ParseFstsAt(FileStream fs, uint fstOffset, uint fstSize, string prefix, List<ArchiveEntry> output)
+        void CollectTable2Entries(List<ArchiveEntry> entries, HashSet<string> dirs,
+            Dictionary<string, ArchiveEntry> fileMap, List<Table2Entry> table2, PidxHeader header)
         {
-            long baseOffset = fstOffset;
-            if (baseOffset + 4 > fs.Length) return;
+            var visited = new HashSet<int>();
+            var paths = new Dictionary<int, string>();
+
+            int rootCount = (int)Math.Min(header.RootDirectoryChildCount, (uint)table2.Count);
+            if (rootCount > 0)
+            {
+                for (int i = 0; i < rootCount; i++)
+                    BuildPaths(table2, i, string.Empty, paths, visited);
+            }
+            else if (table2.Count > 0)
+            {
+                BuildPaths(table2, 0, string.Empty, paths, visited);
+            }
+
+            foreach (var kvp in paths)
+            {
+                var entry = table2[kvp.Key];
+                if (entry.IsDirectory)
+                {
+                    if (dirs.Add(kvp.Value))
+                        entries.Add(new ArchiveEntry { Path = kvp.Value, IsDirectory = true });
+                }
+                else
+                {
+                    AddFile(entries, fileMap, kvp.Value, entry.DataOffset,
+                        (int)entry.CompressedSize, (int)entry.DecompressedSize);
+                }
+            }
+
+            for (int i = 0; i < table2.Count; i++)
+            {
+                if (visited.Contains(i) || table2[i].IsDirectory)
+                    continue;
+
+                var entry = table2[i];
+                AddFile(entries, fileMap, entry.Name, entry.DataOffset,
+                    (int)entry.CompressedSize, (int)entry.DecompressedSize);
+            }
+        }
+
+        void BuildPaths(List<Table2Entry> table2, int index, string parentPath,
+            Dictionary<int, string> paths, HashSet<int> visited)
+        {
+            if (index < 0 || index >= table2.Count || visited.Contains(index))
+                return;
+
+            visited.Add(index);
+            var entry = table2[index];
+            string path = string.IsNullOrEmpty(parentPath) ? entry.Name : parentPath + "/" + entry.Name;
+            paths[index] = path;
+
+            if (!entry.IsDirectory)
+                return;
+
+            for (uint i = 0; i < entry.ChildCount; i++)
+                BuildPaths(table2, (int)(entry.ChildStart + i), path, paths, visited);
+        }
+
+        void CollectTable3Entries(List<ArchiveEntry> entries, HashSet<string> dirs,
+            Dictionary<string, ArchiveEntry> fileMap, FileStream fs, BinaryReader br, PidxHeader header)
+        {
+            fs.Position = header.Table3Offset;
+            uint count = br.ReadUInt32();
+
+            var pointers = new uint[count];
+            for (uint i = 0; i < count; i++)
+                pointers[i] = br.ReadUInt32() + header.Table3Offset;
+
+            for (uint i = 0; i < count; i++)
+            {
+                fs.Position = pointers[i] + 8;
+                uint fstsOffset = br.ReadUInt32();
+
+                if (fstsOffset + 16 > fs.Length)
+                    continue;
+
+                fs.Position = fstsOffset;
+                if (Encoding.ASCII.GetString(br.ReadBytes(4)) != "FSTS")
+                    continue;
+
+                uint entryCount = br.ReadUInt32();
+                uint entriesOffset = br.ReadUInt32();
+                uint stringPoolOffset = br.ReadUInt32();
+
+                for (uint j = 0; j < entryCount; j++)
+                {
+                    fs.Position = fstsOffset + entriesOffset + j * 16;
+                    uint nameOff = br.ReadUInt32();
+                    uint dataOff = br.ReadUInt32();
+                    uint decompSize = br.ReadUInt32();
+                    uint compSize = br.ReadUInt32();
+
+                    string name = ReadStringAt(fs, fstsOffset + stringPoolOffset + nameOff);
+                    string path = name.Replace('\\', '/').TrimStart('/');
+
+                    AddDirectories(entries, dirs, path);
+                    AddFile(entries, fileMap, path, fstsOffset + dataOff, (int)compSize, (int)decompSize);
+                }
+            }
+        }
+
+        void AddFile(List<ArchiveEntry> entries, Dictionary<string, ArchiveEntry> fileMap,
+            string path, long offset, int compSize, int decompSize)
+        {
+            if (fileMap.ContainsKey(path))
+                return;
+
+            var entry = new ArchiveEntry
+            {
+                Path = path,
+                IsDirectory = false,
+                Offset = offset,
+                Size = compSize,
+                UncompressedSize = decompSize
+            };
+
+            entries.Add(entry);
+            fileMap[path] = entry;
+        }
+
+        void AddDirectories(List<ArchiveEntry> entries, HashSet<string> dirs, string filePath)
+        {
+            var parts = filePath.Split('/');
+            if (parts.Length <= 1)
+                return;
+
+            var sb = new StringBuilder();
+            for (int i = 0; i < parts.Length - 1; i++)
+            {
+                if (i > 0)
+                    sb.Append('/');
+                sb.Append(parts[i]);
+                string dirPath = sb.ToString();
+                if (dirs.Add(dirPath))
+                    entries.Add(new ArchiveEntry { Path = dirPath, IsDirectory = true });
+            }
+        }
+
+        string ReadStringAt(FileStream fs, long offset)
+        {
+            if (offset < 0 || offset >= fs.Length)
+                return string.Empty;
 
             long saved = fs.Position;
-            fs.Position = baseOffset;
-            using var br = new BinaryReader(fs, Encoding.ASCII, true);
+            fs.Position = offset;
 
-            byte[] magicBytes = br.ReadBytes(4);
-            string magic = Encoding.ASCII.GetString(magicBytes);
-            if (magic != "FSTS")
-            {
-                fs.Position = saved;
-                return;
-            }
-
-            uint idxq = br.ReadUInt32();
-            uint indexStart = br.ReadUInt32();
-            uint nameStart = br.ReadUInt32();
-
-            fs.Position = baseOffset + indexStart;
-            var encSjis = Encoding.GetEncoding(932);
-
-            for (uint i = 0; i < idxq; i++)
-            {
-                uint nameOffset = br.ReadUInt32();
-                uint offset = br.ReadUInt32();
-                uint size = br.ReadUInt32();
-                uint uncompressSize = br.ReadUInt32();
-
-                long namePos = baseOffset + nameStart + nameOffset;
-                string name = fs.ReadNullTerminatedStringAt(namePos, encSjis);
-                string innerPath = name.Replace('\\', '/').Trim('/');
-
-                string fullPath = string.IsNullOrEmpty(prefix)
-                    ? innerPath
-                    : $"{prefix}/{innerPath}";
-
-                long globalOffset = baseOffset + offset;
-
-                output.Add(new ArchiveEntry
-                {
-                    Path = fullPath,
-                    IsDirectory = false,
-                    Offset = globalOffset,
-                    Size = (int)size,
-                    UncompressedSize = (int)uncompressSize
-                });
-            }
+            var bytes = new List<byte>();
+            int b;
+            while ((b = fs.ReadByte()) > 0)
+                bytes.Add((byte)b);
 
             fs.Position = saved;
+            return bytes.Count == 0 ? string.Empty : ShiftJis.GetString(bytes.ToArray());
         }
 
-        class DatEntry
+        class PidxHeader
         {
-            public int Index { get; set; }
-            public uint Type { get; set; }
-            public uint NameOffset { get; set; }
-            public uint Sign { get; set; }
-            public uint Offset { get; set; }
-            public uint UncompressedSize { get; set; }
-            public uint Size { get; set; }
-            public string FileName { get; set; } = string.Empty;
+            public string Magic;
+            public uint Table1Offset;
+            public uint Table1Count;
+            public uint Table2Offset;
+            public uint Table2Count;
+            public uint RootDirectoryChildCount;
+            public uint Table3Offset;
+            public uint Table3Size;
+            public uint StringPoolOffset;
+            public uint StringPoolSize;
+        }
+
+        class Table2Entry
+        {
+            public string Name;
+            public bool IsDirectory;
+            public uint ChildCount;
+            public uint ChildStart;
+            public uint DataOffset;
+            public uint DecompressedSize;
+            public uint CompressedSize;
         }
     }
 }

@@ -241,8 +241,8 @@ namespace Verviewer.UI
                         : string.Compare(nameB, nameA, StringComparison.CurrentCultureIgnoreCase);
 
                 case 1:
-                    long sa = aDir ? 0 : a.Size;
-                    long sb = bDir ? 0 : b.Size;
+                    long sa = aDir ? 0 : (a.UncompressedSize > 0 ? a.UncompressedSize : a.Size);
+                    long sb = bDir ? 0 : (b.UncompressedSize > 0 ? b.UncompressedSize : b.Size);
                     int c = sa.CompareTo(sb);
                     if (c != 0) return _sortAscending ? c : -c;
                     return _sortAscending
@@ -307,7 +307,7 @@ namespace Verviewer.UI
             else
             {
                 name = Path.GetFileName(entry.Path);
-                size = entry.IsDirectory ? "" : (entry.Size >= 0 ? entry.Size.ToString() : "");
+                size = entry.IsDirectory ? "" : (entry.UncompressedSize > 0 ? entry.UncompressedSize.ToString() : (entry.Size > 0 ? entry.Size.ToString() : ""));
                 type = entry.IsDirectory ? "<文件夹>" : (Path.GetExtension(entry.Path)?.Trim('.').ToLowerInvariant() ?? "");
             }
 
