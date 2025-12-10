@@ -10,7 +10,7 @@ namespace Verviewer.Archives
     [ArchivePlugin(
         id: "Artdink DAT",
         extensions: new[] { "dat" },
-        magics: new[] { "PIDX0" }
+        magics: new[] { "PIDX" }
     )]
     internal class Artdink_DAT : IArchiveHandler
     {

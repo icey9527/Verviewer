@@ -228,7 +228,13 @@ namespace Verviewer.UI
             using (var g = Graphics.FromImage(bmp))
             {
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                g.Clear(Color.Black);
+                using (var gridBrush = new System.Drawing.Drawing2D.HatchBrush(
+                    System.Drawing.Drawing2D.HatchStyle.LargeCheckerBoard, 
+                    Color.LightGray, 
+                    Color.White))
+                {
+                    g.FillRectangle(gridBrush, 0, 0, targetW, targetH);
+                }
                 g.DrawImage(_originalImage, new Rectangle(0, 0, targetW, targetH));
             }
 

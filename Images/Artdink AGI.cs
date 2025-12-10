@@ -1,6 +1,5 @@
 using System;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using Verviewer.Core;
 using Utils; // StreamUtils, ImageUtils
@@ -13,30 +12,58 @@ namespace Verviewer.Images
     )]
     internal sealed class AgiImageHandler : IImageHandler
     {
+        struct AgiEntry
+        {
+            public uint   DataOffset; // +0x00
+            public uint   Reg1;       // +0x04
+            public uint   Reg2;       // +0x08
+            public uint   Reg3;       // +0x0C
+            public ushort Width;      // +0x10
+            public ushort Height;     // +0x12
+        }
+
         public Image? TryDecode(Stream stream, string? ext)
         {
             Stream s = stream.EnsureSeekable();
             try
             {
-                if (!s.CanSeek || s.Length < 0x30) return null;
+                if (!s.CanSeek || s.Length < 0x20)
+                    return null;
 
-                int width  = s.ReadUInt16LEAt(0x18);
-                int height = s.ReadUInt16LEAt(0x1A);
-                if (width <= 0 || height <= 0) return null;
+                ushort imageCount = s.ReadUInt16LEAt(0x04);
+                ushort clutCount  = s.ReadUInt16LEAt(0x06);
+                if (imageCount == 0)
+                    return null;
 
-                byte[] flag = s.ReadBytesAt(0x2C, 4);
-                if (flag.Length < 4) return null;
+                var texEntry = ReadEntryAt(s, 0x08);
+                if (texEntry.Width == 0 || texEntry.Height == 0)
+                    return null;
 
-                string bppFlag = BytesToHex(flag);
+                int  width  = texEntry.Width;
+                int  height = texEntry.Height;
+                byte psm    = (byte)((texEntry.Reg1 >> 16) & 0xFF);
+                int  psmIdx = psm & 7;
+                bool hasClut = clutCount > 0;
 
-                return bppFlag switch
+                AgiEntry clutEntry = default;
+                if (hasClut)
                 {
-                    "44494449" => Read16bpp(s, width, height),
-                    "00300100" => Read24bpp(s, width, height),
-                    "10001000" => Read8bpp(s, width, height),
-                    "00001400" or "08000200" => Read4bpp(s, width, height),
-                    _ => null
-                };
+                    long clutEntryOff = 0x08 + imageCount * 20;
+                    if (clutEntryOff + 20 > s.Length)
+                        return null;
+                    clutEntry = ReadEntryAt(s, clutEntryOff);
+                }
+
+                if (hasClut && psmIdx == 3)
+                    return Read8bpp(s, width, height, texEntry, clutEntry);
+                if (hasClut && psmIdx == 4)
+                    return Read4bpp(s, width, height, texEntry, clutEntry);
+                if (!hasClut && psmIdx == 2)
+                    return Read16bpp(s, width, height, texEntry);
+                if (!hasClut && psmIdx == 1)
+                    return Read24bpp(s, width, height, texEntry);
+
+                return null;
             }
             catch
             {
@@ -49,20 +76,33 @@ namespace Verviewer.Images
             }
         }
 
-        // 4bpp
-        static Image? Read4bpp(Stream s, int width, int height)
+        static AgiEntry ReadEntryAt(Stream s, long offset)
         {
-            uint palOff = s.ReadUInt32LEAt(0x1C);
+            AgiEntry e;
+            e.DataOffset = s.ReadUInt32LEAt(offset + 0);
+            e.Reg1       = s.ReadUInt32LEAt(offset + 4);
+            e.Reg2       = s.ReadUInt32LEAt(offset + 8);
+            e.Reg3       = s.ReadUInt32LEAt(offset + 12);
+            e.Width      = s.ReadUInt16LEAt(offset + 16);
+            e.Height     = s.ReadUInt16LEAt(offset + 18);
+            return e;
+        }
+
+        static Image? Read4bpp(Stream s, int width, int height, AgiEntry tex, AgiEntry clut)
+        {
+            uint palOff = clut.DataOffset;
             if (palOff == 0) return null;
             if (palOff + 16 * 4 > s.Length) return null;
 
             s.Position = palOff;
             byte[] palRaw = s.ReadExactly(16 * 4);
-
             byte[] paletteBgra = ImageUtils.BuildPaletteBgraFromRgba(palRaw, 16, applyPs2AlphaFix: true);
 
-            int pixelDataOffset = 0x30;
+            int pixelDataOffset = (int)tex.DataOffset;
             if (pixelDataOffset >= s.Length) return null;
+            long need = ((long)(width + 1) / 2) * height;
+            if (pixelDataOffset + need > s.Length) return null;
+
             s.Position = pixelDataOffset;
 
             var bmp = ImageUtils.CreateArgbBitmap(width, height, out var bd, out int stride);
@@ -89,21 +129,21 @@ namespace Verviewer.Images
             return bmp;
         }
 
-        // 8bpp + PS2 调色板重排
-        static Image? Read8bpp(Stream s, int width, int height)
+        static Image? Read8bpp(Stream s, int width, int height, AgiEntry tex, AgiEntry clut)
         {
-            int palOff = ReadUInt24At(s, 0x1C);
-            if (palOff <= 0) return null;
+            uint palOff = clut.DataOffset;
+            if (palOff == 0) return null;
             if (palOff + 256 * 4 > s.Length) return null;
 
             s.Position = palOff;
-            byte[] palData = s.ReadExactly(256 * 4); // RGBA
-
-            // 使用公共的 PS2 256 色调色板构建函数
+            byte[] palData = s.ReadExactly(256 * 4);
             byte[] paletteBgra = ImageUtils.BuildPs2Palette256Bgra_Block32(palData);
 
-            int pixelDataOffset = 0x30;
+            int pixelDataOffset = (int)tex.DataOffset;
             if (pixelDataOffset >= s.Length) return null;
+            long need = (long)width * height;
+            if (pixelDataOffset + need > s.Length) return null;
+
             s.Position = pixelDataOffset;
 
             var bmp = ImageUtils.CreateArgbBitmap(width, height, out var bd, out int stride);
@@ -130,10 +170,9 @@ namespace Verviewer.Images
             return bmp;
         }
 
-        // 16bpp RGB555
-        static Image? Read16bpp(Stream s, int width, int height)
+        static Image? Read16bpp(Stream s, int width, int height, AgiEntry tex)
         {
-            int pixelDataOffset = 0x20;
+            int pixelDataOffset = (int)tex.DataOffset;
             long need = (long)width * height * 2;
             if (pixelDataOffset + need > s.Length) return null;
 
@@ -163,10 +202,9 @@ namespace Verviewer.Images
             return bmp;
         }
 
-        // 24bpp RGB
-        static Image? Read24bpp(Stream s, int width, int height)
+        static Image? Read24bpp(Stream s, int width, int height, AgiEntry tex)
         {
-            int pixelDataOffset = 0x50;
+            int pixelDataOffset = (int)tex.DataOffset;
             long need = (long)width * height * 3;
             if (pixelDataOffset + need > s.Length) return null;
 
@@ -195,34 +233,5 @@ namespace Verviewer.Images
             ImageUtils.UnlockBitmap(bd, bmp);
             return bmp;
         }
-
-        // 辅助: 24bit 小端读取 + 十六进制字符串
-
-        static int ReadUInt24At(Stream s, long off)
-        {
-            long save = s.Position;
-            s.Position = off;
-            int b0 = s.ReadByte();
-            int b1 = s.ReadByte();
-            int b2 = s.ReadByte();
-            s.Position = save;
-            if ((b0 | b1 | b2) < 0)
-                throw new EndOfStreamException();
-            return b0 | (b1 << 8) | (b2 << 16);
-        }
-
-        static string BytesToHex(byte[] bytes)
-        {
-            char[] c = new char[bytes.Length * 2];
-            int i = 0;
-            foreach (var b in bytes)
-            {
-                c[i++] = GetHexNibble(b >> 4);
-                c[i++] = GetHexNibble(b & 0xF);
-            }
-            return new string(c);
-        }
-
-        static char GetHexNibble(int v) => (char)(v < 10 ? '0' + v : 'a' + (v - 10));
     }
 }
