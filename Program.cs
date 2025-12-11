@@ -2,7 +2,7 @@
 using System.Text;
 using System.Windows.Forms;
 using Verviewer.UI;
-
+using System.Globalization;
 namespace Verviewer
 {
     internal static class Program
@@ -13,7 +13,8 @@ namespace Verviewer
             try
             {
                 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-
+                var lang = CultureInfo.CurrentUICulture.Name;
+                SR.SetLanguage(lang);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
 
