@@ -14,6 +14,7 @@ jobs:
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,7 +22,24 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x  # 改成 8
+          dotnet-version: 8.0.x  # .NET 8
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 在 CI 里跑 SR.py：
+      #   源码根目录 = .
+      #   输出目录   = .  （原地覆盖 .cs）
+      #   --no-resx       （不生成/覆盖 resx）
+      - name: Run localization script (in-place)
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
+        run: |
+          python .\SR.py . . --no-resx
 
       - name: Restore (default)
         run: dotnet restore
@@ -32,7 +50,7 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
-      # 不带运行时
+      # 不带运行时（framework-dependent）
       - name: Publish framework-dependent
         run: >
           dotnet publish Verviewer.csproj -c Release
@@ -41,7 +59,7 @@ jobs:
           -o out/win-fdd
           --no-restore
 
-      # 带运行时 + 压缩
+      # 带运行时 + 单文件（self-contained single-file）
       - name: Publish self-contained single-file
         run: >
           dotnet publish Verviewer.csproj -c Release
@@ -54,10 +72,27 @@ jobs:
           -o out/win-scd
           --no-restore
 
-      - name: Zip outputs
+      # 准备要上传的 exe（项目名.exe / 项目名.net.exe）
+      - name: Prepare artifacts
+        shell: pwsh
         run: |
-          powershell Compress-Archive -Path out\win-scd\* -DestinationPath out\Verviewer-win-x64-selfcontained.zip
-          powershell Compress-Archive -Path out\win-fdd\* -DestinationPath out\Verviewer-win-framework-dependent.zip
+          $scdSrc = "out\win-scd\Verviewer.exe"
+          $fddSrc = "out\win-fdd\Verviewer.exe"
+
+          if (-not (Test-Path $scdSrc)) {
+            Write-Error "Self-contained exe not found: $scdSrc"
+          }
+          if (-not (Test-Path $fddSrc)) {
+            Write-Error "Framework-dependent exe not found: $fddSrc"
+          }
+
+          # 不带运行时：项目名.exe
+          $fddDest = "out\Verviewer.exe"
+          # 带运行时：项目名.net.exe
+          $scdDest = "out\Verviewer.net.exe"
+
+          Copy-Item $fddSrc $fddDest -Force
+          Copy-Item $scdSrc $scdDest -Force
 
       - name: Delete old release
         uses: cb80/delrel@latest
@@ -73,32 +108,29 @@ jobs:
           tag_name: nightly
           name: Nightly Build (Auto Updated)
           body: |
-            ## 📦 下载说明
-            
-            ### ⭐ 推荐下载（大多数用户选这个）
-            
-            👉 **[点击下载 Verviewer-win-x64-selfcontained.zip](https://github.com/${{ github.repository }}/releases/download/nightly/Verviewer-win-x64-selfcontained.zip)**
-            
-            解压后双击 `Verviewer.exe` 即可运行，无需安装任何东西！
-            
+            ## 📦 下载 / Download
+
+            - ⭐ 推荐 / Recommended  
+              👉 **[Verviewer.net.exe](https://github.com/${{ github.repository }}/releases/download/nightly/Verviewer.net.exe)**  
+              直接下载后双击运行，无需安装 .NET。  
+              Just download and run. No .NET runtime required.
+
+            - 💾 精简版 / Framework-dependent  
+              👉 **[Verviewer.exe](https://github.com/${{ github.repository }}/releases/download/nightly/Verviewer.exe)**  
+              需要先安装 [.NET 8 运行时](https://dotnet.microsoft.com/download/dotnet/8.0)。  
+              Requires [.NET 8 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
+
             ---
-            
-            ### 💾 精简版（体积更小）
-            
-            👉 [点击下载 Verviewer-win-framework-dependent.zip](https://github.com/${{ github.repository }}/releases/download/nightly/Verviewer-win-framework-dependent.zip)
-            
-            需要先安装 [.NET 8 运行时](https://dotnet.microsoft.com/download/dotnet/8.0)，适合已安装 .NET 的用户。
-            
-            ---
-            
-            ⚠️ 这是自动构建的测试版本，可能不稳定。
-            
-            | 信息 | 详情 |
-            |------|------|
-            | 🕐 构建时间 | ${{ github.event.head_commit.timestamp }} |
-            | 📝 提交 | [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
+
+            ⚠️ 这是自动构建的夜间预览版本，可能不稳定。  
+            ⚠️ This is an automated nightly preview build and may be unstable.
+
+            | 信息 / Info | 详情 / Details |
+            |-------------|----------------|
+            | 🕐 构建时间 / Build time | ${{ github.event.head_commit.timestamp }} |
+            | 📝 提交 / Commit | [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
           prerelease: true
           draft: false
           files: |
-            out/Verviewer-win-x64-selfcontained.zip
-            out/Verviewer-win-framework-dependent.zip
+            out/Verviewer.net.exe
+            out/Verviewer.exe

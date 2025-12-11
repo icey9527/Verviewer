@@ -1,34 +1,130 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <root>
   <resheader name="resmimetype">
     <value>text/microsoft-resx</value>
-  </resheader>
-  <resheader name="version">
+  </resheader><resheader name="version">
     <value>2.0</value>
-  </resheader>
-  <resheader name="reader">
+  </resheader><resheader name="reader">
     <value>System.Resources.ResXResourceReader, System.Windows.Forms</value>
-  </resheader>
-  <resheader name="writer">
+  </resheader><resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms</value>
-  </resheader>
-
-  <data name="MainForm.Title" xml:space="preserve">
-    <value>Verviewer</value>
-  </data>
-  <data name="Menu.Open" xml:space="preserve">
-    <value>打开</value>
-  </data>
-  <data name="Menu.OpenFile" xml:space="preserve">
-    <value>打开文件(&amp;F)...</value>
-  </data>
-  <data name="Menu.OpenFolder" xml:space="preserve">
-    <value>打开文件夹(&amp;D)...</value>
-  </data>
-  <data name="Menu.Extract" xml:space="preserve">
+  </resheader><data name="DIR_1" xml:space="preserve">
+    <value>文件夹不存在：{folderPath}</value>
+  </data><data name="ExtractOptionsForm_1" xml:space="preserve">
+    <value>哈哈，你是不是拿我寻开心，啥也没选。</value>
+  </data><data name="ExtractOptionsForm_10" xml:space="preserve">
+    <value>转换图像格式</value>
+  </data><data name="ExtractOptionsForm_11" xml:space="preserve">
+    <value>过滤模式（勾选 = 排除这些后缀）</value>
+  </data><data name="ExtractOptionsForm_12" xml:space="preserve">
+    <value>文件后缀（不带点，逗号分隔；留空 = 全部）：</value>
+  </data><data name="ExtractOptionsForm_13" xml:space="preserve">
+    <value>提取选项</value>
+  </data><data name="ExtractOptionsForm_2" xml:space="preserve">
+    <value>取消</value>
+  </data><data name="ExtractOptionsForm_3" xml:space="preserve">
+    <value>确定</value>
+  </data><data name="ExtractOptionsForm_4" xml:space="preserve">
+    <value>提示：勾选\"仅提取图像\"后，后缀过滤将被忽略。</value>
+  </data><data name="ExtractOptionsForm_5" xml:space="preserve">
+    <value>白色</value>
+  </data><data name="ExtractOptionsForm_6" xml:space="preserve">
+    <value>黑色</value>
+  </data><data name="ExtractOptionsForm_7" xml:space="preserve">
+    <value>去除透明通道：</value>
+  </data><data name="ExtractOptionsForm_8" xml:space="preserve">
+    <value>输出格式：</value>
+  </data><data name="ExtractOptionsForm_9" xml:space="preserve">
+    <value>仅提取图像</value>
+  </data><data name="MainForm_1" xml:space="preserve">
+    <value>封包: {_currentArchiveRuleName}    图片: {_currentImageHandlerName}</value>
+  </data><data name="MainForm_ArchiveOpening_1" xml:space="preserve">
+    <value>Verviewer - [文件夹] {name}</value>
+  </data><data name="MainForm_ArchiveOpening_10" xml:space="preserve">
+    <value>所有文件|*.*</value>
+  </data><data name="MainForm_ArchiveOpening_2" xml:space="preserve">
+    <value>错误</value>
+  </data><data name="MainForm_ArchiveOpening_3" xml:space="preserve">
+    <value>打开文件夹失败：\n</value>
+  </data><data name="MainForm_ArchiveOpening_4" xml:space="preserve">
+    <value>选择要打开的文件夹</value>
+  </data><data name="MainForm_ArchiveOpening_5" xml:space="preserve">
+    <value>无法打开</value>
+  </data><data name="MainForm_ArchiveOpening_6" xml:space="preserve">
+    <value>\n最后一个错误信息：\n</value>
+  </data><data name="MainForm_ArchiveOpening_7" xml:space="preserve">
+    <value>所有候选插件都无法打开这个封包。</value>
+  </data><data name="MainForm_ArchiveOpening_8" xml:space="preserve">
+    <value>没有找到可以处理这个封包的插件。</value>
+  </data><data name="MainForm_ArchiveOpening_9" xml:space="preserve">
+    <value>选择封包文件</value>
+  </data><data name="MainForm_DragDrop_1" xml:space="preserve">
+    <value>释放以打开: {path}</value>
+  </data><data name="MainForm_Extraction_1" xml:space="preserve">
+    <value>提示</value>
+  </data><data name="MainForm_Extraction_10" xml:space="preserve">
+    <value>处理文件失败：\n{pathCopy}\n{Message}</value>
+  </data><data name="MainForm_Extraction_11" xml:space="preserve">
+    <value>没有匹配筛选条件的文件。</value>
+  </data><data name="MainForm_Extraction_12" xml:space="preserve">
+    <value>选择提取文件的目标文件夹</value>
+  </data><data name="MainForm_Extraction_2" xml:space="preserve">
+    <value>没有可提取的文件。</value>
+  </data><data name="MainForm_Extraction_3" xml:space="preserve">
+    <value>请先选中一个文件或文件夹。</value>
+  </data><data name="MainForm_Extraction_4" xml:space="preserve">
+    <value>无法提取</value>
+  </data><data name="MainForm_Extraction_5" xml:space="preserve">
+    <value>还没有打开任何封包。</value>
+  </data><data name="MainForm_Extraction_6" xml:space="preserve">
+    <value>完成</value>
+  </data><data name="MainForm_Extraction_7" xml:space="preserve">
+    <value>提取完成。共 {extracted} 个文件。</value>
+  </data><data name="MainForm_Extraction_8" xml:space="preserve">
+    <value>提取完成。\n成功：{extracted} 个，跳过：{skipped} 个</value>
+  </data><data name="MainForm_Extraction_9" xml:space="preserve">
+    <value>提取错误</value>
+  </data><data name="MainForm_ListView_1" xml:space="preserve">
+    <value>&lt;文件夹&gt;</value>
+  </data><data name="MainForm_ListView_2" xml:space="preserve">
+    <value>返回上一个封包</value>
+  </data><data name="MainForm_Preview_1" xml:space="preserve">
+    <value>复制图片到剪贴板失败：\n</value>
+  </data><data name="MainForm_Preview_2" xml:space="preserve">
+    <value>无法复制</value>
+  </data><data name="MainForm_Preview_3" xml:space="preserve">
+    <value>无法将这个文件识别为图片。</value>
+  </data><data name="MainForm_Preview_4" xml:space="preserve">
+    <value>\r\n\r\n[仅预览前 {MaxTextPreviewBytes} 字节，其余已省略]</value>
+  </data><data name="MainForm_Preview_5" xml:space="preserve">
+    <value>[文本解码失败: {Message}]\r\n\r\n(尝试更换底部编码后再试)</value>
+  </data><data name="MainForm_Preview_6" xml:space="preserve">
+    <value>[看起来不是文本文件，已跳过文本预览]\r\n</value>
+  </data><data name="MainForm_Ui_1" xml:space="preserve">
+    <value>无法打开浏览器：\n{Message}</value>
+  </data><data name="MainForm_Ui_10" xml:space="preserve">
+    <value>类型</value>
+  </data><data name="MainForm_Ui_11" xml:space="preserve">
+    <value>大小</value>
+  </data><data name="MainForm_Ui_12" xml:space="preserve">
+    <value>名称</value>
+  </data><data name="MainForm_Ui_2" xml:space="preserve">
+    <value>GitHub 主页(&amp;G)</value>
+  </data><data name="MainForm_Ui_3" xml:space="preserve">
+    <value>检查更新(&amp;U)</value>
+  </data><data name="MainForm_Ui_4" xml:space="preserve">
+    <value>关于</value>
+  </data><data name="MainForm_Ui_5" xml:space="preserve">
     <value>提取(&amp;E)...</value>
-  </data>
-  <data name="Menu.Back" xml:space="preserve">
-    <value>返回(&amp;B)</value>
+  </data><data name="MainForm_Ui_6" xml:space="preserve">
+    <value>打开文件夹(&amp;D)...</value>
+  </data><data name="MainForm_Ui_7" xml:space="preserve">
+    <value>打开文件(&amp;F)...</value>
+  </data><data name="MainForm_Ui_8" xml:space="preserve">
+    <value>打开</value>
+  </data><data name="MainForm_Ui_9" xml:space="preserve">
+    <value>复制图片(&amp;C)</value>
+  </data><data name="Program_1" xml:space="preserve">
+    <value>程序发生未处理异常</value>
   </data>
 </root>

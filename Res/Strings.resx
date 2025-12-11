@@ -1,34 +1,130 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <root>
   <resheader name="resmimetype">
     <value>text/microsoft-resx</value>
-  </resheader>
-  <resheader name="version">
+  </resheader><resheader name="version">
     <value>2.0</value>
-  </resheader>
-  <resheader name="reader">
+  </resheader><resheader name="reader">
     <value>System.Resources.ResXResourceReader, System.Windows.Forms</value>
-  </resheader>
-  <resheader name="writer">
+  </resheader><resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms</value>
-  </resheader>
-
-  <data name="MainForm.Title" xml:space="preserve">
-    <value>Verviewer</value>
-  </data>
-  <data name="Menu.Open" xml:space="preserve">
+  </resheader><data name="DIR_1" xml:space="preserve">
+    <value>Folder does not exist: {folderPath}</value>
+  </data><data name="ExtractOptionsForm_1" xml:space="preserve">
+    <value>Haha, are you messing with me? You didn't select anything.</value>
+  </data><data name="ExtractOptionsForm_10" xml:space="preserve">
+    <value>Convert image format</value>
+  </data><data name="ExtractOptionsForm_11" xml:space="preserve">
+    <value>Filter mode (checked = exclude these extensions)</value>
+  </data><data name="ExtractOptionsForm_12" xml:space="preserve">
+    <value>File extensions (without dot, comma-separated; empty = all):</value>
+  </data><data name="ExtractOptionsForm_13" xml:space="preserve">
+    <value>Extraction options</value>
+  </data><data name="ExtractOptionsForm_2" xml:space="preserve">
+    <value>Cancel</value>
+  </data><data name="ExtractOptionsForm_3" xml:space="preserve">
+    <value>OK</value>
+  </data><data name="ExtractOptionsForm_4" xml:space="preserve">
+    <value>Note: When \"Images only\" is checked, extension filtering will be ignored.</value>
+  </data><data name="ExtractOptionsForm_5" xml:space="preserve">
+    <value>White</value>
+  </data><data name="ExtractOptionsForm_6" xml:space="preserve">
+    <value>Black</value>
+  </data><data name="ExtractOptionsForm_7" xml:space="preserve">
+    <value>Remove alpha channel:</value>
+  </data><data name="ExtractOptionsForm_8" xml:space="preserve">
+    <value>Output format:</value>
+  </data><data name="ExtractOptionsForm_9" xml:space="preserve">
+    <value>Images only</value>
+  </data><data name="MainForm_1" xml:space="preserve">
+    <value>Archive: {_currentArchiveRuleName}    Image: {_currentImageHandlerName}</value>
+  </data><data name="MainForm_ArchiveOpening_1" xml:space="preserve">
+    <value>Verviewer - [Folder] {name}</value>
+  </data><data name="MainForm_ArchiveOpening_10" xml:space="preserve">
+    <value>All files|*.*</value>
+  </data><data name="MainForm_ArchiveOpening_2" xml:space="preserve">
+    <value>Error</value>
+  </data><data name="MainForm_ArchiveOpening_3" xml:space="preserve">
+    <value>Failed to open folder:\n</value>
+  </data><data name="MainForm_ArchiveOpening_4" xml:space="preserve">
+    <value>Select a folder to open</value>
+  </data><data name="MainForm_ArchiveOpening_5" xml:space="preserve">
+    <value>Cannot open</value>
+  </data><data name="MainForm_ArchiveOpening_6" xml:space="preserve">
+    <value>\nLast error message:\n</value>
+  </data><data name="MainForm_ArchiveOpening_7" xml:space="preserve">
+    <value>None of the candidate plugins could open this archive.</value>
+  </data><data name="MainForm_ArchiveOpening_8" xml:space="preserve">
+    <value>No plugin was found that can handle this archive.</value>
+  </data><data name="MainForm_ArchiveOpening_9" xml:space="preserve">
+    <value>Select archive file</value>
+  </data><data name="MainForm_DragDrop_1" xml:space="preserve">
+    <value>Drop to open: {path}</value>
+  </data><data name="MainForm_Extraction_1" xml:space="preserve">
+    <value>Information</value>
+  </data><data name="MainForm_Extraction_10" xml:space="preserve">
+    <value>Failed to process file:\n{pathCopy}\n{Message}</value>
+  </data><data name="MainForm_Extraction_11" xml:space="preserve">
+    <value>No files matched the filter conditions.</value>
+  </data><data name="MainForm_Extraction_12" xml:space="preserve">
+    <value>Select destination folder for extracted files</value>
+  </data><data name="MainForm_Extraction_2" xml:space="preserve">
+    <value>No files available for extraction.</value>
+  </data><data name="MainForm_Extraction_3" xml:space="preserve">
+    <value>Please first select a file or folder.</value>
+  </data><data name="MainForm_Extraction_4" xml:space="preserve">
+    <value>Cannot extract</value>
+  </data><data name="MainForm_Extraction_5" xml:space="preserve">
+    <value>No archive has been opened yet.</value>
+  </data><data name="MainForm_Extraction_6" xml:space="preserve">
+    <value>Done</value>
+  </data><data name="MainForm_Extraction_7" xml:space="preserve">
+    <value>Extraction finished. {extracted} files in total.</value>
+  </data><data name="MainForm_Extraction_8" xml:space="preserve">
+    <value>Extraction finished.\nSucceeded: {extracted}, skipped: {skipped}</value>
+  </data><data name="MainForm_Extraction_9" xml:space="preserve">
+    <value>Extraction error</value>
+  </data><data name="MainForm_ListView_1" xml:space="preserve">
+    <value>&lt;Folder&gt;</value>
+  </data><data name="MainForm_ListView_2" xml:space="preserve">
+    <value>Return to previous archive</value>
+  </data><data name="MainForm_Preview_1" xml:space="preserve">
+    <value>Failed to copy image to clipboard:\n</value>
+  </data><data name="MainForm_Preview_2" xml:space="preserve">
+    <value>Cannot copy</value>
+  </data><data name="MainForm_Preview_3" xml:space="preserve">
+    <value>This file cannot be recognized as an image.</value>
+  </data><data name="MainForm_Preview_4" xml:space="preserve">
+    <value>\r\n\r\n[Only the first {MaxTextPreviewBytes} bytes are previewed; the rest has been omitted]</value>
+  </data><data name="MainForm_Preview_5" xml:space="preserve">
+    <value>[Text decoding failed: {Message}]\r\n\r\n(Try changing the encoding at the bottom and try again)</value>
+  </data><data name="MainForm_Preview_6" xml:space="preserve">
+    <value>[Doesn't look like a text file, text preview skipped]\r\n</value>
+  </data><data name="MainForm_Ui_1" xml:space="preserve">
+    <value>Failed to open browser:\n{Message}</value>
+  </data><data name="MainForm_Ui_10" xml:space="preserve">
+    <value>Type</value>
+  </data><data name="MainForm_Ui_11" xml:space="preserve">
+    <value>Size</value>
+  </data><data name="MainForm_Ui_12" xml:space="preserve">
+    <value>Name</value>
+  </data><data name="MainForm_Ui_2" xml:space="preserve">
+    <value>GitHub Home (&amp;G)</value>
+  </data><data name="MainForm_Ui_3" xml:space="preserve">
+    <value>Check for Updates (&amp;U)</value>
+  </data><data name="MainForm_Ui_4" xml:space="preserve">
+    <value>About</value>
+  </data><data name="MainForm_Ui_5" xml:space="preserve">
+    <value>Extract (&amp;E)...</value>
+  </data><data name="MainForm_Ui_6" xml:space="preserve">
+    <value>Open Folder (&amp;D)...</value>
+  </data><data name="MainForm_Ui_7" xml:space="preserve">
+    <value>Open File (&amp;F)...</value>
+  </data><data name="MainForm_Ui_8" xml:space="preserve">
     <value>Open</value>
-  </data>
-  <data name="Menu.OpenFile" xml:space="preserve">
-    <value>Open File...</value>
-  </data>
-  <data name="Menu.OpenFolder" xml:space="preserve">
-    <value>Open Folder...</value>
-  </data>
-  <data name="Menu.Extract" xml:space="preserve">
-    <value>Extract...</value>
-  </data>
-  <data name="Menu.Back" xml:space="preserve">
-    <value>Back</value>
+  </data><data name="MainForm_Ui_9" xml:space="preserve">
+    <value>Copy Image (&amp;C)</value>
+  </data><data name="Program_1" xml:space="preserve">
+    <value>An unhandled exception occurred in the application</value>
   </data>
 </root>
