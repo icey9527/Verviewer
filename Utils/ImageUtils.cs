@@ -395,84 +395,19 @@ namespace Utils
             }
         }
 
-        /// <summary>
-        /// 从 256*4 RGBA 调色板构建 PS2 风格的 BGRA 调色板（FAC/AGI/TEX/TFX 通用）:
-        /// 1) 对每个颜色的 A 应用 FixAlphaPs2;
-        /// 2) 按 32 色块重排 (0-7,16-23,8-15,24-31);
-        /// 3) 最终输出 BGRA 数组。
-        /// 这是把你 FAC / AGI / TEX / TXF 原来的逻辑打包成一个公共函数。
-        /// </summary>
         public static byte[] BuildPs2Palette256Bgra_Block32(byte[] srcRgba256)
+        {
+            return BuildPs2Palette256Bgra_Block32(srcRgba256, true);
+        }
+
+        public static byte[] BuildPs2Palette256Bgra_Block32(byte[] srcRgba256, bool applyPs2AlphaFix)
         {
             if (srcRgba256 == null) throw new ArgumentNullException(nameof(srcRgba256));
             if (srcRgba256.Length < 256 * 4)
                 throw new ArgumentException("srcRgba256 too short (need 256*4 bytes).");
 
-            // 1) 先在 RGBA 域里做 Alpha 修正
-            var tmp = new byte[256 * 4];
-            for (int i = 0; i < 256; i++)
-            {
-                int off = i * 4;
-                byte r = srcRgba256[off + 0];
-                byte g = srcRgba256[off + 1];
-                byte b = srcRgba256[off + 2];
-                byte a = FixAlphaPs2(srcRgba256[off + 3]); // PS2 Alpha
-
-                tmp[off + 0] = r;
-                tmp[off + 1] = g;
-                tmp[off + 2] = b;
-                tmp[off + 3] = a;
-            }
-
-            // 2) 再按 32 色块重排 + 转成 BGRA
-            var palette = new byte[256 * 4];
-            int dst = 0;
-
-            for (int major = 0; major < 256; major += 32)
-            {
-                // 0-7
-                for (int i = 0; i < 8; i++)
-                {
-                    int src = (major + i) * 4;
-                    palette[dst + 0] = tmp[src + 2]; // B
-                    palette[dst + 1] = tmp[src + 1]; // G
-                    palette[dst + 2] = tmp[src + 0]; // R
-                    palette[dst + 3] = tmp[src + 3]; // A
-                    dst += 4;
-                }
-                // 16-23
-                for (int i = 16; i < 24; i++)
-                {
-                    int src = (major + i) * 4;
-                    palette[dst + 0] = tmp[src + 2];
-                    palette[dst + 1] = tmp[src + 1];
-                    palette[dst + 2] = tmp[src + 0];
-                    palette[dst + 3] = tmp[src + 3];
-                    dst += 4;
-                }
-                // 8-15
-                for (int i = 8; i < 16; i++)
-                {
-                    int src = (major + i) * 4;
-                    palette[dst + 0] = tmp[src + 2];
-                    palette[dst + 1] = tmp[src + 1];
-                    palette[dst + 2] = tmp[src + 0];
-                    palette[dst + 3] = tmp[src + 3];
-                    dst += 4;
-                }
-                // 24-31
-                for (int i = 24; i < 32; i++)
-                {
-                    int src = (major + i) * 4;
-                    palette[dst + 0] = tmp[src + 2];
-                    palette[dst + 1] = tmp[src + 1];
-                    palette[dst + 2] = tmp[src + 0];
-                    palette[dst + 3] = tmp[src + 3];
-                    dst += 4;
-                }
-            }
-
-            return palette;
+            var reordered = ReorderPalettePs2Block32Rgba(srcRgba256, 256);
+            return BuildPaletteBgraFromRgba(reordered, 256, applyPs2AlphaFix);
         }
 
 /// <summary>
