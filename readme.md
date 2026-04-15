@@ -8,7 +8,8 @@ GPT5模仿 garbro写的玩意儿，将支持一些我感兴趣的格式。（温
 | ヤミと帽子と本の旅人 / コゲとリリスのナハトムジーク | PC | PAK | GRP |  
 | 探偵オペラ ミル キィホームズ | PSP | APK | GIM / 2DC |  
 | きると 貴方と紡ぐ夢と恋のドレス | PS2 | PAC | TM2 |  
-| To Heart PSE | PC | PAK | LCF / LFB / LFF 
+| To Heart PSE | PC | PAK | LCF / LFB / LFF |
+| デ・ジ・キャラット ファンタジー | PC | PAK | GRP | 
 
 * [封包插件开发](docs/ArchivePlugin-Guide.md)
 * [图片插件开发](docs/ImagePlugin-Guide.md) 
