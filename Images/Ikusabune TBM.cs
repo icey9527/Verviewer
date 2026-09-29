@@ -137,7 +137,8 @@ namespace Verviewer.Images
                 long need = (long)srcRow * ph;
                 if (start < 0 || start + need > s.Length) return false;
 
-                s.Position = start;
+                // 顶部被裁的部件从源第 sy 行开始读 (sy 只在大端裁剪时非 0)
+                s.Position = start + (long)sy * srcRow;
 
                 var rowSrc = new byte[srcRow];
                 var rowOut = new byte[wClip * 4];
