@@ -11,7 +11,7 @@ namespace Verviewer.Archives
     [ArchivePlugin(
         id: "Ikusabune IPFB",
         extensions: new[] { "pak" },
-        magics: null
+        magics: new[] { "IPFB" }
     )]
     internal sealed class IkusabuneIpfbArchiveHandler : IArchiveHandler
     {
