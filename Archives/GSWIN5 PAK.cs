@@ -46,7 +46,7 @@ namespace Verviewer.Archives
                 if (indexData.Length < fileCount * entrySize)
                     throw new InvalidDataException();
 
-                var enc = Encoding.GetEncoding(936);
+                var enc = Encoding.GetEncoding(932);
 
                 for (int i = 0; i < fileCount; i++)
                 {

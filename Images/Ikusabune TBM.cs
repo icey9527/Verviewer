@@ -107,8 +107,9 @@ namespace Verviewer.Images
                 if (dstY + hClip > height) hClip = height - dstY;
                 if (wClip <= 0 || hClip <= 0) continue;
 
+                // 游戏按 4 字节对齐的行距读源数据 (sub_60821EF0: 24bpp→Align4(pw*3), 16bpp→Align4(pw*2))
                 int srcRow;
-                try { srcRow = checked(pw * bytesPerPixel); } catch { return false; }
+                try { srcRow = Align4(checked(pw * bytesPerPixel)); } catch { return false; }
 
                 long need = (long)srcRow * ph;
                 int pixelOffset;
@@ -134,7 +135,7 @@ namespace Verviewer.Images
                         Marshal.Copy(rowOut, 0, dest, rowOut.Length);
                     }
                 }
-                else // 16bpp 特殊打包，沿用原来的解码方式
+                else // 16bpp: X RRRRR GGGGG BBBBB (bit15 空置, 无 alpha), 与游戏 sub_60821BC0 一致
                 {
                     var rowSrc = new byte[srcRow];
                     var rowOut = new byte[wClip * 4];
@@ -174,6 +175,8 @@ namespace Verviewer.Images
 
             return true;
         }
+
+        static int Align4(int x) => (x + 3) & ~3;
 
         static bool ReadHeader(Stream s, out int width, out int height, out int parts, out int bpp, out int offsetBase)
         {
