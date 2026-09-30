@@ -9,7 +9,7 @@ namespace Verviewer.Images
     [ImagePlugin(
         id: "ACTRESS PB6",
         extensions: new[] { "bmp" },
-        magics: new[] { "PB6", "BM8" }
+        magics: new[] { "PB6" }
     )]
     internal sealed class ActressPb6ImageHandler : IImageHandler
     {
@@ -27,11 +27,10 @@ namespace Verviewer.Images
                 int width = s.ReadUInt16LEAt(18);
                 int height = s.ReadUInt16LEAt(22);
                 int bpp = s.ReadUInt16LEAt(28);
-                bool rawArgb = s.ReadBytesAt(0, 3).AsSpan().SequenceEqual("BM8"u8);
 
                 if (width <= 0 || height <= 0 || width > 16384 || height > 16384)
                     return null;
-                if (rawArgb ? bpp != 32 : bpp is not (8 or 24 or 32))
+                if (bpp is not (8 or 24 or 32))
                     return null;
 
                 int pixelSize = bpp / 8;
@@ -41,7 +40,7 @@ namespace Verviewer.Images
                     return null;
 
                 byte[] pixels;
-                if (bpp == 8 || rawArgb)
+                if (bpp == 8)
                 {
                     if ((long)dataOffset + decodedSize > s.Length)
                         return null;
@@ -112,10 +111,11 @@ namespace Verviewer.Images
             for (int i = 0; i < 256; i++)
             {
                 int p = i * 4;
-                palette[p + 0] = source[p + 2];
+                palette[p + 0] = source[p + 0];
                 palette[p + 1] = source[p + 1];
-                palette[p + 2] = source[p + 0];
-                palette[p + 3] = 255;
+                palette[p + 2] = source[p + 2];
+                palette[p + 3] = (source[p + 0] == 0 && source[p + 1] == 0 && source[p + 2] == 0)
+                    ? (byte)0 : (byte)255;   // 游戏规则：调色板 RGB 全 0 即全透明
             }
             return palette;
         }
