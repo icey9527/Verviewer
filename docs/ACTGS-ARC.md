@@ -93,33 +93,41 @@ repeat N 次:
 
 因此插件**没有注册 `wav` 扩展名**，以免把普通 wav 音频误判为容器。
 
-## 6. 图像条目：不要写图像插件
+## 6. 图像条目：BMP 交给 builtin，PSD 需自解
 
 `arc.cg` 共 1003 条，按扩展名分两类，**实测结论并不相同**：
 
-| 类型 | 数量 | 修正混淆后 GDI+ 实测 |
-|---|---|---|
-| `.bmp` | 103 | ✅ **可解**：`Image.FromStream` 返回 `800x600 Format24bppRgb`（标准 24bit 无压缩，`bfOffBits=54, biSize=40, planes=1, biCompression=0`） |
-| `.psd` | 900 | ❌ **不可解**：`Image.FromStream` 抛"参数无效" |
+| 类型 | 数量 | GDI+ 直接解码 | 处理方案 |
+|---|---|---|---|
+| `.bmp` | 103 | ✅ 可解（标准 24bit 无压缩，`bfOffBits=54, biSize=40, planes=1, biCompression=0`） | 交给 builtin，**不写插件** |
+| `.psd` | 900 | ❌ 抛"参数无效" | 由 `Images/ACTGS PSD.cs` 自解 |
 
-PSD 头本身合法（`8BPS` version=1、channels=3、depth=8、mode=3、`ColorModeLength=0`、
-`compression=0`），但**图像数据长度不足**：如 `bg02a_01.psd` 声明 1648×600×3 需
-2,966,400 字节，条目实际仅 2,571,496 字节。三个样本一致，说明这些 `.psd` 是
-ACTGS 内部资源（分层/裁切数据），**不是可直接预览的完整 PSD**。
+> 更正：此前一度判定"PSD 图像数据长度不足、不是完整 PSD"，**该结论错误**——
+> 原因是漏跳了 Image Resources 与 Layer and Mask 两段，把 Image Resources 的长度
+> 当成了 `compression` 字段。按标准分段跳过后：`compression=1`（PackBits RLE），
+> 平面数据完整，实测解码出正确图像（颜色、上下方向均正常）。
 
-`UI/MainForm.Preview.cs` 的 `TryDecodeImage()` 在所有插件未命中时有 builtin 回退：
+PSD 实际布局：
 
-```csharp
-decoded = Image.FromStream(s, true, true);   // GDI+ 原生支持 BMP / PSD
+```
+Header(26)  signature/version/channels/height/width/depth/mode
+ColorModeData   len(4) + data
+ImageResources  len(4) + data        ← 常见数 KB，跳过它才能定位到 compression
+LayerAndMask    len(4) + data        ← 可达 MB 级
+ImageData       compression(2) + 数据
 ```
 
-> ✅ BMP 交给 builtin，**不要**为它注册 `extensions:{bmp}` / `magics:{BM}` 的图像插件：
-> 那会插到 builtin 乃至专用插件之前，抢走其他游戏（含 WHITE CLARITY **PS2 版**的
-> AFS+PB6 通路）的 `.bmp` 条目。容器插件只注册 `scr` / `cg`，不碰 `bmp`。
+`compression=1` 时数据区为：先 `channels×height` 个**大端 uint16** 行字节数表
+（按通道分组：通道0 的全部行、再通道1…），随后各段 **PackBits** 压缩的平面数据；
+平面为 planar 顺序 R、G、B，行序自上而下。
 
-> ⚠ **PSD 目前无法预览**（900 条）。若要支持，需写一个**只针对 `.psd`** 的插件去解析
-> ACTGS 的分层数据，且必须用 `magics:{"hex:38 42 50 53"}` 精确限定、不要注册 `psd` 扩展名，
-> 以免抢占其他引擎的 PSD。此项尚未实现。
+`Images/ACTGS PSD.cs` 的实现顺序刻意是**先试 GDI+、失败才自解**：
+对任何内置解码已能处理的 PSD，行为与 builtin 完全一致，只是额外兜住 GDI+ 解不开的一类，
+因此不会让其他游戏的 PSD 预览变差。仅支持 `depth=8`、`mode=RGB/灰度`，忽略第 4 通道。
+
+> ⚠ BMP 侧仍**不要**注册 `extensions:{bmp}` / `magics:{BM}` 的图像插件：
+> 那会插到 builtin 乃至专用插件之前，抢走其他游戏（含 WHITE CLARITY **PS2 版**的
+> AFS+PB6 通路）的 `.bmp` 条目。
 
 ## 7. 脚本正文（汉化相关）
 
