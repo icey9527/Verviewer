@@ -132,7 +132,7 @@ namespace Verviewer.Archives
             {
                 if (pos + RecordSize > fileLen) return false;
 
-                var rec = XorStream(fs.ReadAt(pos, RecordSize), 0);
+                var rec = XorStream(fs.ReadBytesAt(pos, RecordSize), 0);
 
                 long size = BitConverter.ToUInt32(rec, 0);
                 if (size <= 0 || size > fileLen) return false;
@@ -174,7 +174,7 @@ namespace Verviewer.Archives
             long dataStart = 16 + indexLen;
             if (dataStart > fileLen) return false;
 
-            var idx = XorStream(fs.ReadAt(16, (int)indexLen), 0);
+            var idx = XorStream(fs.ReadBytesAt(16, (int)indexLen), 0);
             var list = new List<ArchiveEntry>(count);
 
             for (int i = 0; i < count; i++)
