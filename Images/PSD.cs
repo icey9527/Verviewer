@@ -20,11 +20,11 @@ namespace Verviewer.Images
     /// 因此不会让其他游戏的 PSD 预览变差。
     /// </summary>
     [ImagePlugin(
-        id: "ACTGS PSD",
+        id: "PSD",
         extensions: new[] { "psd" },
         magics: new[] { "hex:38 42 50 53" }
     )]
-    internal sealed class ActgsPsdImageHandler : IImageHandler
+    internal sealed class PsdImageHandler : IImageHandler
     {
         public Image? TryDecode(Stream stream, string? ext)
         {
@@ -119,13 +119,13 @@ namespace Verviewer.Images
             return BuildBitmap(width, height, mode, planes);
         }
 
-        static Bitmap BuildBitmap(int w, int h, int mode, byte[][] planes)
+        static Bitmap? BuildBitmap(int w, int h, int mode, byte[][] planes)
         {
             var bmp = new Bitmap(w, h, PixelFormat.Format24bppRgb);
             var rect = new Rectangle(0, 0, w, h);
             BitmapData data;
             try { data = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb); }
-            catch { bmp.Dispose(); return null!; }
+            catch { bmp.Dispose(); return null; }
 
             try
             {

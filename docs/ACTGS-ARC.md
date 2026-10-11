@@ -100,7 +100,7 @@ repeat N 次:
 | 类型 | 数量 | GDI+ 直接解码 | 处理方案 |
 |---|---|---|---|
 | `.bmp` | 103 | ✅ 可解（标准 24bit 无压缩，`bfOffBits=54, biSize=40, planes=1, biCompression=0`） | 交给 builtin，**不写插件** |
-| `.psd` | 900 | ❌ 抛"参数无效" | 由 `Images/ACTGS PSD.cs` 自解 |
+| `.psd` | 900 | ❌ 抛"参数无效" | 由 `Images/PSD.cs`（通用 PSD 插件）自解 |
 
 > 更正：此前一度判定"PSD 图像数据长度不足、不是完整 PSD"，**该结论错误**——
 > 原因是漏跳了 Image Resources 与 Layer and Mask 两段，把 Image Resources 的长度
@@ -121,13 +121,13 @@ ImageData       compression(2) + 数据
 （按通道分组：通道0 的全部行、再通道1…），随后各段 **PackBits** 压缩的平面数据；
 平面为 planar 顺序 R、G、B，行序自上而下。
 
-`Images/ACTGS PSD.cs` 的实现顺序刻意是**先试 GDI+、失败才自解**：
+`Images/PSD.cs` 的实现顺序刻意是**先试 GDI+、失败才自解**：
 对任何内置解码已能处理的 PSD，行为与 builtin 完全一致，只是额外兜住 GDI+ 解不开的一类，
 因此不会让其他游戏的 PSD 预览变差。仅支持 `depth=8`、`mode=RGB/灰度`，忽略第 4 通道。
 
 > ⚠ BMP 侧仍**不要**注册 `extensions:{bmp}` / `magics:{BM}` 的图像插件：
 > 那会插到 builtin 乃至专用插件之前，抢走其他游戏（含 WHITE CLARITY **PS2 版**的
-> AFS+PB6 通路）的 `.bmp` 条目。
+> CRI AFS + ACTRESS PB6 通路）的 `.bmp` 条目。
 
 ## 7. 脚本正文（汉化相关）
 
