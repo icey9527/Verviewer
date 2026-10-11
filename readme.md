@@ -10,7 +10,7 @@ GPT5模仿 garbro写的玩意儿，将支持一些我感兴趣的格式。（温
 | きると 貴方と紡ぐ夢と恋のドレス | PS2 | PAC | TM2 |  
 | To Heart PSE | PC | PAK | LCF / LFB / LFF |
 | デ・ジ・キャラット ファンタジー | PC | PAK | GRP | 
-| WHITE CLARITY | PC / PS2 | ARC / CRI AFS | BMP / PSD / PB6 | 
+| WHITE CLARITY | PC / PS2 | ARC / AFS | BMP / PSD / PB6 | 
 * [封包插件开发](docs/ArchivePlugin-Guide.md)
 * [图片插件开发](docs/ImagePlugin-Guide.md) 
 * [ACTGS 归档格式说明](docs/ACTGS-ARC.md)
