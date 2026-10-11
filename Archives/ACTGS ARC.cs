@@ -111,7 +111,7 @@ namespace Verviewer.Archives
 
             byte[] data = mode switch
             {
-                BlockMode.CgStream => XorStream(raw, 0),
+                BlockMode.CgStream => XorHead(raw, RecordSize),   // 布局 B：仅前 32 字节混淆
                 BlockMode.ScrMarked => ScrDecode(raw),
                 _ => raw
             };
@@ -209,6 +209,20 @@ namespace Verviewer.Archives
         }
 
         // ---------------- 变换 ----------------
+
+        /// <summary>
+        /// 布局 B 的数据块：实测仅前 <paramref name="head"/> 字节以 key[i%5] 混淆，其后为明文。
+        /// 若对整块异或，会在明文的 00 填充区凭空造出 key 图案（BMP 头的
+        /// biCompression 会变成 0x33220000 之类的荒谬值，GDI+ 随即报“参数无效”）。
+        /// </summary>
+        static byte[] XorHead(byte[] data, int head)
+        {
+            var o = (byte[])data.Clone();
+            int n = Math.Min(head, o.Length);
+            for (int i = 0; i < n; i++)
+                o[i] = (byte)(o[i] ^ Key[i % Key.Length]);
+            return o;
+        }
 
         /// <summary>整段连续异或，相位以缓冲区首为 0。</summary>
         static byte[] XorStream(byte[] data, int startPhase)

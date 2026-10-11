@@ -14,7 +14,7 @@
 | 归档 | 索引布局 | 记录字段 | 数据块混淆 | 本插件 |
 |---|---|---|---|---|
 | `arc.scr` | 连续 `N×32`，紧跟 16 字节头 | `[off:4][size:4][name:24]` | 有 `'X'` 标记，块内 `key[(i-1)%5]` | ✅ |
-| `arc.cg` | **记录与数据交错**，自 `0x1000` | `[size:4][name:28]`，偏移由引擎推算 | 无标记，块内 `key[i%5]` | ✅ |
+| `arc.cg` | **记录与数据交错**，自 `0x1000` | `[size:4][name:28]`，偏移由引擎推算 | **仅前 32 字节** `key[i%5]`，其后明文 | ✅ |
 | `arc.wav` | 连续 `N×24` | `[off:4][size:4][name:16]` | **无（明文）** | ❌ |
 
 ## 2. 密钥
@@ -69,12 +69,17 @@ repeat N 次:
     rec  = decrypt32(read(pos, 32))          # 逐条独立，相位从 0 起
     size = u32(rec[0:4])
     name = rec[4:32] 截 NUL
-    data = decrypt_stream(read(pos+32, size)) # 整块连续，相位从 0 起
+    data = read(pos+32, size)                 # 仅前 32 字节 key[i%5]，其后原样
     pos += 32 + align16(size)
 ```
 
 记录字段只有 `[size:4][name:28]`；**偏移不存储**，由引擎按
 `off[i] = off[i-1] + align16(size[i-1]) + 32`、`off[0] = 0x1020` 推算。
+
+> ⚠ **数据块混淆范围**：只有条目前 32 字节被 `key[i%5]` 混淆，**其余是明文**。
+> 若对整块异或，会在明文的 00 填充区凭空造出 key 图案 —— BMP 头的
+> `biCompression` 会变成 `0x33220000` 这类荒谬值，GDI+ 随即报"参数无效"。
+> 这是最容易踩且最难自察的一处，务必以 BMP 头字段是否合法来反证。
 
 > ✅ **强判据**：遍历结束时最后一条数据块的结束地址必须**精确等于文件大小**。
 > 样本实测 `942,221,792 == 文件大小`。这是布局 B 最可靠的接受条件，也是与
@@ -90,12 +95,17 @@ repeat N 次:
 
 ## 6. 图像条目：不要写图像插件
 
-`arc.cg` 解密后的条目本身就是标准格式（样本 1003 条）：
+`arc.cg` 共 1003 条，按扩展名分两类，**实测结论并不相同**：
 
-```
-"8BPS" × 900    标准 PSD（channels / height / width / depth / mode 均为标准布局）
-"BM"   × 103    标准 24bit 无压缩 BMP（bfOffBits=54, biSize=40, planes=1）
-```
+| 类型 | 数量 | 修正混淆后 GDI+ 实测 |
+|---|---|---|
+| `.bmp` | 103 | ✅ **可解**：`Image.FromStream` 返回 `800x600 Format24bppRgb`（标准 24bit 无压缩，`bfOffBits=54, biSize=40, planes=1, biCompression=0`） |
+| `.psd` | 900 | ❌ **不可解**：`Image.FromStream` 抛"参数无效" |
+
+PSD 头本身合法（`8BPS` version=1、channels=3、depth=8、mode=3、`ColorModeLength=0`、
+`compression=0`），但**图像数据长度不足**：如 `bg02a_01.psd` 声明 1648×600×3 需
+2,966,400 字节，条目实际仅 2,571,496 字节。三个样本一致，说明这些 `.psd` 是
+ACTGS 内部资源（分层/裁切数据），**不是可直接预览的完整 PSD**。
 
 `UI/MainForm.Preview.cs` 的 `TryDecodeImage()` 在所有插件未命中时有 builtin 回退：
 
@@ -103,9 +113,13 @@ repeat N 次:
 decoded = Image.FromStream(s, true, true);   // GDI+ 原生支持 BMP / PSD
 ```
 
-> ❌ **不要**为它注册 `extensions:{bmp,psd}` 或 `magics:{BM,8BPS}` 的图像插件。
+> ✅ BMP 交给 builtin，**不要**为它注册 `extensions:{bmp}` / `magics:{BM}` 的图像插件：
 > 那会插到 builtin 乃至专用插件之前，抢走其他游戏（含 WHITE CLARITY **PS2 版**的
 > AFS+PB6 通路）的 `.bmp` 条目。容器插件只注册 `scr` / `cg`，不碰 `bmp`。
+
+> ⚠ **PSD 目前无法预览**（900 条）。若要支持，需写一个**只针对 `.psd`** 的插件去解析
+> ACTGS 的分层数据，且必须用 `magics:{"hex:38 42 50 53"}` 精确限定、不要注册 `psd` 扩展名，
+> 以免抢占其他引擎的 PSD。此项尚未实现。
 
 ## 7. 脚本正文（汉化相关）
 
